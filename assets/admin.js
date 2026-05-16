@@ -57,7 +57,9 @@
   const githubState = {
     token: '',
     config: null,
-    connected: false
+    connected: false,
+    actorLogin: '',
+    actorProfile: null
   };
 
   function readJsonScript(id, errorLabel) {
@@ -130,6 +132,82 @@
       Authorization: 'Bearer ' + githubToken(),
       'X-GitHub-Api-Version': '2022-11-28'
     };
+  }
+
+  const editableRoleCapabilities = ['write', 'publish', 'config', 'media', 'archive', 'site_rebrand', 'deploy'];
+
+  function roleDefaultCapabilities(role) {
+    if (role === 'admin') {
+      return { read: true, write: true, publish: true, config: true, media: true, archive: true, site_rebrand: true, deploy: true, roles: true };
+    }
+
+    if (role === 'editor') {
+      return { read: true, write: true, publish: true, config: true, media: true, archive: true, site_rebrand: true, deploy: true, roles: false };
+    }
+
+    return { read: true, write: false, publish: false, config: false, media: false, archive: false, site_rebrand: false, deploy: false, roles: false };
+  }
+
+  function githubRolesConfig() {
+    const config = readGithubConfig();
+
+    return config && config.roles ? config.roles : { default_role: 'viewer', users: {} };
+  }
+
+  function githubProfileForLogin(login) {
+    const roles = githubRolesConfig();
+    const users = roles && roles.users ? roles.users : {};
+    const normalizedLogin = String(login || '').trim();
+    const userKey = Object.keys(users).find((key) => key.toLowerCase() === normalizedLogin.toLowerCase());
+    const profile = userKey ? users[userKey] || {} : {};
+    const role = profile.role === 'admin' || profile.role === 'editor' ? profile.role : (roles.default_role || 'viewer');
+    const defaultCapabilities = roleDefaultCapabilities(role);
+    const capabilities = Object.assign({}, defaultCapabilities, profile.capabilities || {});
+
+    if (role === 'admin') {
+      capabilities.roles = true;
+    }
+
+    if (role === 'editor') {
+      capabilities.roles = false;
+    }
+
+    return {
+      login: userKey || normalizedLogin || 'unknown-github-user',
+      role,
+      status: profile.status === 'disabled' ? 'disabled' : 'active',
+      capabilities
+    };
+  }
+
+  function applyGithubActor(login) {
+    const profile = githubProfileForLogin(login);
+
+    githubState.actorLogin = profile.login;
+    githubState.actorProfile = profile;
+    authState.actor = {
+      id: 'github:' + profile.login,
+      username: profile.login,
+      role: profile.status === 'active' ? profile.role : 'viewer',
+      capabilities: profile.capabilities
+    };
+    setAccountLabel(profile.login + ' / ' + authState.actor.role);
+
+    return authState.actor;
+  }
+
+  function githubRoleUsers() {
+    const roles = githubRolesConfig();
+    const users = roles && roles.users ? roles.users : {};
+
+    return Object.entries(users).map(([login, profile]) => ({
+      id: login,
+      username: login,
+      role: profile && profile.role ? profile.role : 'viewer',
+      status: profile && profile.status ? profile.status : 'active',
+      password_hint: 'GitHub token account',
+      capabilities: profile && profile.capabilities ? profile.capabilities : {}
+    }));
   }
 
   function activeAuthContract(fallback) {
@@ -3951,6 +4029,13 @@
   }
 
   function editorCapabilities(runtime) {
+    if (isGithubMode()) {
+      const users = githubRoleUsers();
+      const editor = users.find((user) => user && user.role === 'editor');
+
+      return editor && editor.capabilities ? Object.assign({}, roleDefaultCapabilities('editor'), editor.capabilities, { read: true, roles: false }) : roleDefaultCapabilities('editor');
+    }
+
     return runtime && runtime.capabilities && runtime.capabilities.editor
       ? runtime.capabilities.editor
       : { read: true, write: false, publish: false, config: false };
@@ -4082,7 +4167,7 @@
         ? user.password_hint
         : (user.password_mode === 'env' ? 'env hash; можно сбросить' : 'пароль скрыт; можно задать новый');
       const caps = user.capabilities || {};
-      const enabled = ['write', 'publish', 'config'].filter((capability) => caps[capability] === true).join(', ') || 'read only';
+      const enabled = editableRoleCapabilities.filter((capability) => caps[capability] === true).join(', ') || 'read only';
 
       return '<article class="admin-user-card" data-admin-user-card="' + escapeHtml(user.id || '') + '">'
         + '<div class="admin-user-card__head"><div><h3>' + escapeHtml(user.username || '') + '</h3>'
@@ -4109,6 +4194,12 @@
   }
 
   async function loadAdminUsers(authContract, runtime) {
+    if (isGithubMode()) {
+      renderAdminUsersList({ users: githubRoleUsers() }, runtime);
+      setRolePermissionsStatus('GitHub-профили загружены из config/admin-github-users.json.');
+      return;
+    }
+
     const path = authEndpoint(authContract, 'admin_users') || protectedEndpointFallbacks.admin_users;
 
     if (!path) {
@@ -4143,11 +4234,6 @@
     const status = adminUserField('status');
     const password = adminUserField('password');
 
-    if (!path) {
-      setRolePermissionsStatus('Endpoint учетных записей недоступен');
-      return;
-    }
-
     const selectedRole = role instanceof HTMLSelectElement ? role.value : 'admin';
     const user = {
       id: id instanceof HTMLInputElement ? id.value.trim() : '',
@@ -4156,12 +4242,64 @@
       status: status instanceof HTMLSelectElement && status.value === 'disabled' ? 'disabled' : 'active'
     };
 
+    if (user.username === '' && user.id !== '') {
+      user.username = user.id;
+    }
+
+    if (user.username === '') {
+      setRolePermissionsStatus(isGithubMode() ? 'Укажи GitHub login профиля.' : 'Укажи логин учетной записи.');
+      return;
+    }
+
     if (password instanceof HTMLInputElement && password.value.trim() !== '') {
       user.password = password.value.trim();
     }
 
     if (user.role === 'editor') {
       user.capabilities = collectAdminUserPermissionFields();
+    } else if (isGithubMode()) {
+      user.capabilities = roleDefaultCapabilities('admin');
+    }
+
+    if (isGithubMode()) {
+      setRolePermissionsStatus('Отправляю изменение GitHub-профиля в Actions...');
+      setStatusBusy('admin-role-permissions-status', true);
+
+      try {
+        const result = await githubDispatchCommand('github_roles', {
+          operation: 'upsert_user',
+          user
+        }, false);
+
+        if (result.ok === false) {
+          const issues = result.issues || (result.errors || []).map((error) => error.human || error.code || 'GitHub-профиль не сохранен');
+          setRolePermissionsStatus((issues.length > 0 ? issues : ['GitHub-профиль не сохранен']).join('; '));
+          setStatusBusy('admin-role-permissions-status', false);
+          return;
+        }
+
+        const roles = githubRolesConfig();
+        roles.users = roles.users || {};
+        roles.users[user.username || user.id] = {
+          role: user.role,
+          status: user.status,
+          capabilities: user.capabilities || roleDefaultCapabilities(user.role)
+        };
+        renderAdminUsersList({ users: githubRoleUsers() }, runtime);
+        populateAdminUserForm(user, runtime);
+        setRolePermissionsStatus('GitHub-профиль отправлен в Actions. После workflow обновится Pages-админка.');
+        setStatusBusy('admin-role-permissions-status', false);
+        return;
+      } catch (error) {
+        setRolePermissionsStatus('GitHub Actions недоступен: ' + (error && error.message ? error.message : 'network error'));
+        setStatusBusy('admin-role-permissions-status', false);
+        return;
+      }
+    }
+
+    if (!path) {
+      setRolePermissionsStatus('Endpoint учетных записей недоступен');
+      return;
     }
 
     setRolePermissionsStatus('Сохраняю учетную запись...');
@@ -4225,6 +4363,42 @@
 
   async function saveEditorPermissions(authContract) {
     const path = authEndpoint(authContract, 'role_permissions') || protectedEndpointFallbacks.role_permissions;
+    const capabilities = collectEditorPermissionFields();
+
+    if (isGithubMode()) {
+      setRolePermissionsStatus('Отправляю права editor в Actions...');
+      setStatusBusy('admin-role-permissions-status', true);
+
+      try {
+        const result = await githubDispatchCommand('github_roles', {
+          operation: 'update_editor_capabilities',
+          capabilities
+        }, false);
+
+        if (result.ok === false) {
+          const issues = result.issues || (result.errors || []).map((error) => error.human || error.code || 'Права editor не сохранены');
+          setRolePermissionsStatus((issues.length > 0 ? issues : ['Права editor не сохранены']).join('; '));
+          setStatusBusy('admin-role-permissions-status', false);
+          return;
+        }
+
+        const roles = githubRolesConfig();
+        const users = roles && roles.users ? roles.users : {};
+        Object.keys(users).forEach((login) => {
+          if (users[login] && users[login].role === 'editor') {
+            users[login].capabilities = Object.assign({}, capabilities, { read: true, roles: false });
+          }
+        });
+        renderAdminUsersList({ users: githubRoleUsers() }, {});
+        setRolePermissionsStatus('Права editor отправлены в Actions. Editor по-прежнему не получает доступ к блоку ролей.');
+        setStatusBusy('admin-role-permissions-status', false);
+        return;
+      } catch (error) {
+        setRolePermissionsStatus('GitHub Actions недоступен: ' + (error && error.message ? error.message : 'network error'));
+        setStatusBusy('admin-role-permissions-status', false);
+        return;
+      }
+    }
 
     if (!path) {
       setRolePermissionsStatus('Endpoint прав editor недоступен');
@@ -4246,7 +4420,7 @@
         body: JSON.stringify({
           request_id: 'req-editor-permissions-' + Date.now(),
           target_role: 'editor',
-          capabilities: collectEditorPermissionFields()
+          capabilities
         })
       });
       const payload = await readResponseJson(response);
@@ -4270,7 +4444,7 @@
     const panel = document.querySelector('[data-role-permissions]');
     const shell = byId('admin-role-permissions') || (panel ? panel.closest('[data-section-panel="role-permissions"]') : null);
     const actor = authState.actor || {};
-    const isAdmin = actor && actor.role === 'admin';
+    const isAdmin = actor && (actor.role === 'admin' || (actor.capabilities && actor.capabilities.roles === true));
     const runtime = manifest && manifest.runtime ? manifest.runtime : {};
 
     if (!panel) {
@@ -4292,7 +4466,9 @@
       return;
     }
 
-    setRolePermissionsStatus('Можно изменить права editor.');
+    setRolePermissionsStatus(isGithubMode()
+      ? 'Можно изменить GitHub-профили admin/editor.'
+      : 'Можно изменить права editor.');
     renderAdminUsersList({ users: adminState.adminUsers }, runtime);
     loadAdminUsers(readAuthContract() || authContract, runtime);
     wireAdminUserManager(readAuthContract() || authContract, runtime);
@@ -4512,13 +4688,9 @@
         return;
       }
 
-      authState.actor = {
-        id: 'github:' + (config.repository || 'repository'),
-        username: 'github-actions',
-        role: 'editor'
-      };
+      applyGithubActor(githubState.actorLogin || 'unknown-github-user');
       renderAdminBootstrap(payload);
-      setGithubStatus('GitHub подключен. Команды публикации будут запускать workflow_dispatch.');
+      setGithubStatus('GitHub подключен: ' + (authState.actor ? authState.actor.username + ' / ' + authState.actor.role : 'unknown') + '. Команды публикации будут запускать workflow_dispatch.');
     } catch (error) {
       clearAdminBootstrap('GitHub bootstrap unavailable');
       setGithubStatus('Bootstrap недоступен: ' + (error && error.message ? error.message : 'network error'));
@@ -4534,6 +4706,16 @@
     }
 
     try {
+      const userResponse = await fetch(githubApiUrl('/user'), {
+        method: 'GET',
+        headers: githubHeaders()
+      });
+      const userPayload = await readResponseJson(userResponse);
+
+      if (!userResponse.ok) {
+        return { ok: false, message: userPayload.message || 'GitHub token не прошел проверку пользователя.' };
+      }
+
       const response = await fetch(githubApiUrl('/repos/' + repository), {
         method: 'GET',
         headers: githubHeaders()
@@ -4544,7 +4726,9 @@
         return { ok: false, message: payload.message || 'GitHub token не прошел проверку.' };
       }
 
-      return { ok: true, message: 'GitHub token проверен.' };
+      applyGithubActor(userPayload.login || '');
+
+      return { ok: true, message: 'GitHub token проверен: ' + authState.actor.username + ' / ' + authState.actor.role + '.' };
     } catch (error) {
       return { ok: false, message: error && error.message ? error.message : 'GitHub API недоступен.' };
     }
@@ -5279,6 +5463,9 @@
       disconnectButton.addEventListener('click', () => {
         githubState.token = '';
         githubState.connected = false;
+        githubState.actorLogin = '';
+        githubState.actorProfile = null;
+        authState.actor = null;
         sessionStorage.removeItem(githubSessionKey());
 
         if (tokenInput) {
