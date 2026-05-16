@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GitHub CMS Admin</title>
+<link rel="stylesheet" href="assets/admin.css">
+<script src="assets/admin.js" defer></script>
+</head>
+<body data-admin-shell="cms" data-builder-stage="module-builder-v1" data-admin-page="github-pages">
+<a class="skip-link" href="#admin-main">Skip to admin content</a>
+<header class="admin-topbar">
+<a class="admin-brand" href="../public/index.html" aria-label="NutriScope preview"><span>NS</span><strong>NutriScope CMS</strong></a>
+<nav class="admin-nav" aria-label="Admin sections"><a href="#admin-editorial">Публикация</a><a href="#admin-product-cards">Карточки товаров</a><a href="#admin-design">Дизайн</a><a href="#admin-technical">Техническое</a></nav>
+<button type="button" class="role-permissions-shortcut" data-role-permissions-shortcut hidden aria-controls="admin-role-permissions">Права и редактор</button>
+<div class="account-menu" data-account-menu>
+<button type="button" class="account-toggle" data-account-toggle aria-controls="admin-account-panel" aria-expanded="false"><span>Аккаунт</span><strong data-account-label>Войти</strong></button>
+<div id="admin-account-panel" class="account-panel" data-auth-session hidden aria-labelledby="admin-auth-heading">
+<div class="account-panel__header"><h2 id="admin-auth-heading">Auth Session</h2><p>Логин и пароль для локальной CMS-сессии.</p></div>
+<form class="auth-form" data-auth-login autocomplete="off">
+<div class="auth-form__grid">
+<label for="admin-auth-login">Логин<input id="admin-auth-login" name="cms_login_field" value="" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="admin-auth-status"></label>
+<label for="admin-auth-password">Password<span id="admin-auth-password-hint" class="sr-only">Use your local CMS admin password.</span><input id="admin-auth-password" name="cms_password" value="" type="password" autocomplete="new-password" aria-describedby="admin-auth-password-hint admin-auth-status"></label>
+<input id="admin-auth-request" name="request_id" value="req-admin-login" autocomplete="off" type="hidden">
+</div>
+<div class="auth-form__actions">
+<button type="submit">Login</button>
+<button type="button" data-auth-session-check>Check session</button>
+<button type="button" data-auth-logout>Logout</button>
+<output id="admin-auth-status" data-auth-status role="status" aria-live="polite" aria-atomic="true">Not authenticated</output>
+</div>
+</form>
+<details class="auth-output">
+<summary>Session details</summary>
+<dl><dt>Login</dt><dd><code>/admin/auth/login</code></dd><dt>Session</dt><dd><code>/admin/auth/session</code></dd><dt>Logout</dt><dd><code>/admin/auth/logout</code></dd></dl>
+<label for="admin-auth-session-output">Session JSON<textarea id="admin-auth-session-output" readonly rows="8"></textarea></label>
+</details>
+</div>
+</div>
+</header>
+<main id="admin-main" class="admin-shell" tabindex="-1">
+<section class="admin-hero admin-hero--github">
+<p class="admin-kicker">GitHub-hosted CMS Admin</p>
+<h1>Панель управления через GitHub Actions</h1>
+<p>Эта версия админки работает как статическая GitHub Pages-страница. Изменения контента отправляются в защищенный workflow, коммитятся в репозиторий и затем деплоятся статическим артефактом на VPS.</p>
+</section>
+<section class="admin-section auth-gate github-auth-gate" data-auth-gate data-github-auth-gate>
+<div class="admin-section__header"><h2>GitHub доступ</h2><p>Введите fine-grained token с правами Actions: write и Contents: write для репозитория. Токен хранится только в sessionStorage текущего браузера.</p></div>
+<form class="github-auth-form" data-github-auth autocomplete="off">
+<div class="auth-form__grid">
+<label for="admin-github-repository">Repository<input id="admin-github-repository" value="juicevik/New-project" readonly></label>
+<label for="admin-github-workflow">Workflow<input id="admin-github-workflow" value="admin-command.yml" readonly></label>
+<label for="admin-github-token">GitHub token<input id="admin-github-token" data-github-token type="password" autocomplete="off" placeholder="github_pat_..." aria-describedby="admin-github-status"></label>
+<label for="admin-github-branch">Branch<input id="admin-github-branch" data-github-branch value="main" autocomplete="off"></label>
+</div>
+<label class="checkbox-row"><input type="checkbox" data-github-deploy-after checked> Деплоить статический VPS после публикации</label>
+<div class="auth-form__actions">
+<button type="submit">Подключить GitHub</button>
+<button type="button" data-github-disconnect>Забыть токен</button>
+<a class="button-link" href="https://github.com/juicevik/New-project/actions/workflows/admin-command.yml" target="_blank" rel="noopener">Открыть Actions</a>
+<output id="admin-github-status" data-github-status role="status" aria-live="polite" aria-atomic="true">GitHub не подключен.</output>
+</div>
+</form>
+</section>
+<div data-admin-gated-root></div>
+<script type="application/json" id="admin-auth-contract">{"version":"admin-http-auth-v1","generated_at":"2026-05-16T22:22:00+00:00","cookie_name":"nutriscope_admin","csrf_header":"X-CSRF-Token","endpoints":{"bootstrap":{"method":"GET","path":"/admin/bootstrap","requires_cookie":true},"login":{"method":"POST","path":"/admin/auth/login","content_type":"application/json","body_fields":["request_id","username","password"]},"session":{"method":"GET","path":"/admin/auth/session","requires_cookie":true,"returns_csrf_token":true},"logout":{"method":"POST","path":"/admin/auth/logout","requires_cookie":true,"requires_csrf_header":true}}}</script>
+<script type="application/json" id="admin-github-config">{"version":"github-admin-v1","repository":"juicevik/New-project","owner":"juicevik","repo":"New-project","branch":"main","bootstrap_url":"github-bootstrap.json","workflow":"admin-command.yml","workflow_id":"admin-command.yml","pages_url":"https://juicevik.github.io/New-project/","actions_url":"https://github.com/juicevik/New-project/actions/workflows/admin-command.yml","api_base":"https://api.github.com"}</script>
+</main>
+</body>
+</html>
