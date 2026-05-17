@@ -2613,6 +2613,142 @@
     });
   }
 
+  function githubContentsPath(path) {
+    return String(path || '').split('/').map((part) => encodeURIComponent(part)).join('/');
+  }
+
+  function safeMediaFilename(file, prefix) {
+    const rawName = String(file && file.name ? file.name : 'upload').trim();
+    const dot = rawName.lastIndexOf('.');
+    const rawBase = dot > 0 ? rawName.slice(0, dot) : rawName;
+    const rawExt = dot > 0 ? rawName.slice(dot + 1) : '';
+    const ext = String(rawExt || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8) || 'bin';
+    const base = String(rawBase || 'media')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60) || 'media';
+
+    return prefix + '-' + Date.now().toString(36) + '-' + base + '.' + ext;
+  }
+
+  function mediaUploadFolder(contentType, area) {
+    if (area === 'product' || contentType === 'product') {
+      return 'assets/media/uploads/products';
+    }
+
+    if (contentType === 'author') {
+      return 'assets/media/uploads/people';
+    }
+
+    return 'assets/media/uploads/editorial';
+  }
+
+  async function githubUploadMediaFile(file, contentType, alt, area) {
+    const config = readGithubConfig();
+    const repository = config.repository || '';
+    const branchInput = document.querySelector('[data-github-branch]');
+    const deployInput = document.querySelector('[data-github-deploy-after]');
+    const ref = branchInput && branchInput.value ? branchInput.value.trim() : (config.branch || 'main');
+    const deployAfter = deployInput ? deployInput.checked : true;
+    const allowed = ['image/webp', 'image/jpeg', 'image/png', 'image/svg+xml'];
+
+    if (!repository) {
+      return { ok: false, issues: ['GitHub repository config is missing.'] };
+    }
+
+    if (!allowed.includes(file.type)) {
+      return {
+        ok: false,
+        errors: [{
+          field: 'primary_image',
+          code: 'unsupported_media_type',
+          human: 'Upload webp, jpg, png, or svg media only.'
+        }]
+      };
+    }
+
+    if (file.size > 3 * 1024 * 1024) {
+      return {
+        ok: false,
+        errors: [{
+          field: 'primary_image',
+          code: 'media_too_large',
+          human: 'Media file must be 3 MB or smaller.'
+        }]
+      };
+    }
+
+    if (!githubToken()) {
+      return { ok: false, issues: ['GitHub token не подключен.'] };
+    }
+
+    const folder = mediaUploadFolder(contentType, area);
+    const relativePath = folder + '/' + safeMediaFilename(file, area || contentType || 'media');
+    const publicPath = '/' + relativePath;
+    const base64 = await fileToBase64(file);
+
+    try {
+      const response = await fetch(githubApiUrl('/repos/' + repository + '/contents/' + githubContentsPath(relativePath)), {
+        method: 'PUT',
+        headers: Object.assign({}, githubHeaders(), {
+          'Content-Type': 'application/json'
+        }),
+        body: JSON.stringify({
+          message: 'Upload CMS media: ' + relativePath,
+          content: base64,
+          branch: ref
+        })
+      });
+      const payload = await readResponseJson(response);
+
+      if (!response.ok) {
+        return {
+          ok: false,
+          http_status: response.status,
+          action: 'github_contents_media_upload',
+          errors: [{
+            field: 'github_contents',
+            code: 'upload_failed',
+            human: payload.message || 'GitHub Contents upload failed.',
+            ai_hint: 'Check token Contents write permission and branch protection.'
+          }],
+          data: payload
+        };
+      }
+
+      let deployResult = null;
+
+      if (deployAfter) {
+        deployResult = await githubDispatchWorkflow(config.deploy_workflow_id || 'deploy.yml', {
+          target: 'production'
+        }, config.deploy_actions_url || '');
+      }
+
+      return {
+        ok: true,
+        action: 'github_contents_media_upload',
+        data: {
+          media: {
+            path: publicPath,
+            alt,
+            mime: file.type
+          },
+          commit: payload && payload.commit ? payload.commit.sha : '',
+          deploy: deployResult
+        },
+        written_paths: [relativePath],
+        warnings: deployAfter ? ['Media uploaded to GitHub; static deploy workflow was requested.'] : []
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        action: 'github_contents_media_upload',
+        issues: ['GitHub media upload failed: ' + (error && error.message ? error.message : 'network error')]
+      };
+    }
+  }
+
   async function submitEditorialMedia(contracts, authContract) {
     const fileInput = document.querySelector('[data-editorial-media-file]');
     const file = fileInput && fileInput.files && fileInput.files.length > 0 ? fileInput.files[0] : null;
@@ -2650,10 +2786,18 @@
       };
 
       if (isGithubMode()) {
-        const result = await githubDispatchCommand('media', payload, false);
+        const result = await githubUploadMediaFile(file, contentType, alt, 'editorial');
+
+        if (result && result.ok && result.data && result.data.media) {
+          editorialState.media.primary_image = result.data.media;
+
+          if (byId('admin-editorial-media-path') && result.data.media.path) {
+            byId('admin-editorial-media-path').value = result.data.media.path;
+          }
+        }
 
         setEditorialOutput(result);
-        setEditorialStatus(result.ok ? 'GitHub media workflow запущен.' : 'GitHub media workflow вернул ошибку.');
+        setEditorialStatus(result.ok ? 'Медиа сохранено в GitHub, deploy запрошен.' : 'GitHub media upload вернул ошибку.');
 
         return result;
       }
@@ -3304,10 +3448,18 @@
       };
 
       if (isGithubMode()) {
-        const result = await githubDispatchCommand('media', payload, false);
+        const result = await githubUploadMediaFile(file, 'product', alt, 'product');
+
+        if (result && result.ok && result.data && result.data.media) {
+          productCardState.media.primary_image = result.data.media;
+
+          if (byId('admin-product-card-media-path') && result.data.media.path) {
+            byId('admin-product-card-media-path').value = result.data.media.path;
+          }
+        }
 
         setProductCardOutput(result);
-        setProductCardStatus(result.ok ? 'GitHub media workflow карточки запущен.' : 'GitHub media workflow карточки вернул ошибку.');
+        setProductCardStatus(result.ok ? 'Медиа карточки сохранено в GitHub, deploy запрошен.' : 'GitHub media upload карточки вернул ошибку.');
 
         return result;
       }
