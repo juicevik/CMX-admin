@@ -238,6 +238,7 @@
       capabilities: profile.capabilities
     };
     setAccountLabel(profile.login + ' / ' + authState.actor.role);
+    applyRolePermissionsVisibility(authState.actor);
 
     return authState.actor;
   }
@@ -4153,6 +4154,32 @@
     }
   }
 
+  function canManageRolePermissions(actor) {
+    const current = actor || authState.actor || {};
+    const capabilities = current.capabilities || {};
+
+    return current.role === 'admin' && capabilities.roles === true;
+  }
+
+  function applyRolePermissionsVisibility(actor) {
+    const visible = canManageRolePermissions(actor);
+    const panel = document.querySelector('[data-role-permissions]');
+    const shell = byId('admin-role-permissions') || (panel ? panel.closest('[data-section-panel="role-permissions"]') : null);
+
+    if (panel) {
+      panel.hidden = !visible;
+    }
+
+    if (shell) {
+      shell.hidden = !visible;
+      if (!visible && shell.tagName.toLowerCase() === 'details') {
+        shell.open = false;
+      }
+    }
+
+    setRolePermissionsShortcutVisible(visible);
+  }
+
   function wireRolePermissionsShortcut() {
     const shortcut = document.querySelector('[data-role-permissions-shortcut]');
 
@@ -4582,7 +4609,7 @@
     const panel = document.querySelector('[data-role-permissions]');
     const shell = byId('admin-role-permissions') || (panel ? panel.closest('[data-section-panel="role-permissions"]') : null);
     const actor = authState.actor || {};
-    const isAdmin = actor && (actor.role === 'admin' || (actor.capabilities && actor.capabilities.roles === true));
+    const isAdmin = canManageRolePermissions(actor);
     const runtime = manifest && manifest.runtime ? manifest.runtime : {};
 
     if (!panel) {
@@ -4851,9 +4878,10 @@
       const userPayload = await readResponseJson(userResponse);
 
       if (!userResponse.ok) {
-        return { ok: false, message: userPayload.message || 'GitHub token не прошел проверку пользователя.' };
+        return { ok: false, message: 'GitHub token отклонен: ' + (userPayload.message || 'проверьте, что token полный, активный и не отозван.') };
       }
 
+      const login = userPayload.login || '';
       const response = await fetch(githubApiUrl('/repos/' + repository), {
         method: 'GET',
         headers: githubHeaders()
@@ -4861,10 +4889,15 @@
       const payload = await readResponseJson(response);
 
       if (!response.ok) {
-        return { ok: false, message: payload.message || 'GitHub token не прошел проверку.' };
+        return { ok: false, message: 'GitHub token распознан как ' + (login || 'unknown') + ', но не имеет доступа к ' + repository + ': ' + (payload.message || 'проверьте Contents/Actions permissions и доступ к репозиторию.') };
       }
 
-      applyGithubActor(userPayload.login || '');
+      const actor = applyGithubActor(login);
+
+      if (!['admin', 'editor'].includes(actor.role) || !(actor.capabilities && actor.capabilities.read === true)) {
+        return { ok: false, message: 'GitHub login ' + actor.username + ' не добавлен в разрешенные профили CMS. Admin должен добавить этот login в блоке "Права и редактор".' };
+      }
+
       loadGithubRateLimit();
 
       return { ok: true, message: 'GitHub token проверен: ' + authState.actor.username + ' / ' + authState.actor.role + '.' };
@@ -5609,6 +5642,17 @@
         const verification = await verifyGithubToken();
 
         if (!verification.ok) {
+          githubState.token = '';
+          githubState.connected = false;
+          githubState.actorLogin = '';
+          githubState.actorProfile = null;
+          authState.actor = null;
+          sessionStorage.removeItem(githubSessionKey());
+          if (tokenInput) {
+            tokenInput.value = '';
+          }
+          setAccountLabel('Token не подключен');
+          applyRolePermissionsVisibility(null);
           setGithubStatus(verification.message);
           clearAdminBootstrap('GitHub token не подключен');
           return;
@@ -5630,6 +5674,17 @@
           return;
         }
 
+        githubState.token = '';
+        githubState.connected = false;
+        githubState.actorLogin = '';
+        githubState.actorProfile = null;
+        authState.actor = null;
+        sessionStorage.removeItem(githubSessionKey());
+        if (tokenInput) {
+          tokenInput.value = '';
+        }
+        setAccountLabel('Token не подключен');
+        applyRolePermissionsVisibility(null);
         setGithubStatus(verification.message);
       });
     } else {
