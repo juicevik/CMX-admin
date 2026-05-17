@@ -2151,7 +2151,7 @@
     const faq = editorialModuleProps(pageData, 'faq') || {};
     values.description = editorialString(header.lead || editorialSeoDescription(pageData));
 
-    if (contentType === 'article') {
+    if (contentType === 'article' || contentType === 'review') {
       values.body_sections = Array.isArray(richText.content) ? richText.content.join('\n\n') : '';
       values.author_name = editorialString(pageData.author_name || 'Редакция NutriScope');
     }
