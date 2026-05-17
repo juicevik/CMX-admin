@@ -237,7 +237,7 @@
       role: profile.status === 'active' ? profile.role : 'viewer',
       capabilities: profile.capabilities
     };
-    setAccountLabel(profile.login + ' / ' + authState.actor.role);
+    setAccountLabel(authState.actor.role);
     applyRolePermissionsVisibility(authState.actor);
 
     return authState.actor;
@@ -5613,9 +5613,10 @@
 
       if (tokenInput) {
         tokenInput.value = '';
+        tokenInput.setCustomValidity('');
       }
 
-      setAccountLabel('Token не подключен');
+      setAccountLabel('token');
       setAccountPanelOpen(false);
       clearAdminBootstrap('GitHub token удален из sessionStorage');
       setGithubStatus('GitHub token удален из текущего браузера.');
@@ -5632,6 +5633,9 @@
         event.preventDefault();
 
         githubState.token = tokenInput && tokenInput.value ? tokenInput.value.trim() : '';
+        if (tokenInput) {
+          tokenInput.setCustomValidity('');
+        }
 
         if (githubState.token) {
           sessionStorage.setItem(githubSessionKey(), githubState.token);
@@ -5650,8 +5654,10 @@
           sessionStorage.removeItem(githubSessionKey());
           if (tokenInput) {
             tokenInput.value = '';
+            tokenInput.setCustomValidity(verification.message);
+            tokenInput.reportValidity();
           }
-          setAccountLabel('Token не подключен');
+          setAccountLabel('token');
           applyRolePermissionsVisibility(null);
           setGithubStatus(verification.message);
           clearAdminBootstrap('GitHub token не подключен');
@@ -5682,8 +5688,10 @@
         sessionStorage.removeItem(githubSessionKey());
         if (tokenInput) {
           tokenInput.value = '';
+          tokenInput.setCustomValidity(verification.message);
+          tokenInput.reportValidity();
         }
-        setAccountLabel('Token не подключен');
+        setAccountLabel('token');
         applyRolePermissionsVisibility(null);
         setGithubStatus(verification.message);
       });

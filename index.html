@@ -16,7 +16,7 @@
 <nav class="admin-nav" aria-label="Admin sections"><a href="#admin-editorial">Публикация</a><a href="#admin-product-cards">Карточки товаров</a><a href="#admin-design">Дизайн</a><a href="#admin-technical">Техническое</a></nav>
 <button type="button" class="role-permissions-shortcut" data-role-permissions-shortcut hidden aria-controls="admin-role-permissions">Права и редактор</button>
 <div class="account-menu account-menu--github" data-account-menu-github>
-<button type="button" class="account-toggle" data-account-toggle aria-controls="admin-github-account-panel" aria-expanded="false"><span>GitHub</span><strong data-account-label>Token не подключен</strong></button>
+<button type="button" class="account-toggle" data-account-toggle aria-controls="admin-github-account-panel" aria-expanded="false"><span class="sr-only">Аккаунт</span><strong data-account-label>token</strong></button>
 <div id="admin-github-account-panel" class="account-panel account-panel--github" hidden>
 <div class="account-panel__header"><h2>CMS-admin_v2</h2><p>Версия админки: <strong>Builder V2</strong></p></div>
 <button type="button" class="account-panel__logout" data-github-logout>Выход</button>
@@ -25,26 +25,26 @@
 </header>
 <main id="admin-main" class="admin-shell" tabindex="-1">
 <section class="admin-section auth-gate github-auth-gate" data-auth-gate data-github-auth-gate>
-<div class="admin-section__header"><h2>GitHub доступ</h2><p>Введите fine-grained token с правами Actions: write и Contents: write для репозитория. Токен хранится только в sessionStorage текущего браузера.</p></div>
+<div class="admin-section__header sr-only"><h2>Авторизация</h2><p>Введите token. Токен хранится только в sessionStorage текущего браузера.</p></div>
 <form class="github-auth-form" data-github-auth autocomplete="off">
 <div class="auth-form__grid">
-<label for="admin-github-repository">Repository<input id="admin-github-repository" value="juicevik/New-project" readonly></label>
-<label for="admin-github-workflow">Workflow<input id="admin-github-workflow" value="admin-command.yml" readonly></label>
-<label for="admin-github-token">GitHub token<input id="admin-github-token" data-github-token type="password" autocomplete="off" placeholder="github_pat_..." aria-describedby="admin-github-status"></label>
-<label for="admin-github-branch">Branch<input id="admin-github-branch" data-github-branch value="main" autocomplete="off"></label>
+<label for="admin-github-token">Токен<input id="admin-github-token" data-github-token type="password" autocomplete="off" aria-describedby="admin-github-status"></label>
 </div>
-<label class="checkbox-row"><input type="checkbox" data-github-deploy-after checked> Деплоить статический VPS после публикации</label>
-<div class="auth-form__actions">
-<button type="submit">Подключить GitHub</button>
+<input id="admin-github-repository" value="juicevik/New-project" readonly hidden>
+<input id="admin-github-workflow" value="admin-command.yml" readonly hidden>
+<input id="admin-github-branch" data-github-branch value="main" autocomplete="off" hidden>
+<input type="checkbox" data-github-deploy-after checked hidden aria-hidden="true">
+<div class="auth-form__actions sr-only">
+<button type="submit">Подключить</button>
 <button type="button" data-github-disconnect>Забыть токен</button>
-<a class="button-link" href="https://github.com/juicevik/New-project/actions/workflows/admin-command.yml" target="_blank" rel="noopener">Открыть Actions</a>
+<a class="button-link" href="https://github.com/juicevik/New-project/actions/workflows/admin-command.yml" target="_blank" rel="noopener">Actions</a>
 <output id="admin-github-status" data-github-status role="status" aria-live="polite" aria-atomic="true">GitHub не подключен.</output>
 </div>
 <div class="github-rate-limit" data-github-rate-limit hidden><strong>GitHub API</strong><span data-github-rate-limit-value>Лимиты не загружены</span></div>
 </form>
 </section>
 <div data-admin-gated-root></div>
-<script type="application/json" id="admin-auth-contract">{"version":"admin-http-auth-v1","generated_at":"2026-05-17T10:38:03+00:00","cookie_name":"nutriscope_admin","csrf_header":"X-CSRF-Token","endpoints":{"bootstrap":{"method":"GET","path":"/admin/bootstrap","requires_cookie":true},"login":{"method":"POST","path":"/admin/auth/login","content_type":"application/json","body_fields":["request_id","username","password"]},"session":{"method":"GET","path":"/admin/auth/session","requires_cookie":true,"returns_csrf_token":true},"logout":{"method":"POST","path":"/admin/auth/logout","requires_cookie":true,"requires_csrf_header":true}}}</script>
+<script type="application/json" id="admin-auth-contract">{"version":"admin-http-auth-v1","generated_at":"2026-05-17T11:11:06+00:00","cookie_name":"nutriscope_admin","csrf_header":"X-CSRF-Token","endpoints":{"bootstrap":{"method":"GET","path":"/admin/bootstrap","requires_cookie":true},"login":{"method":"POST","path":"/admin/auth/login","content_type":"application/json","body_fields":["request_id","username","password"]},"session":{"method":"GET","path":"/admin/auth/session","requires_cookie":true,"returns_csrf_token":true},"logout":{"method":"POST","path":"/admin/auth/logout","requires_cookie":true,"requires_csrf_header":true}}}</script>
 <script type="application/json" id="admin-github-config">{"version":"github-admin-v1","repository":"juicevik/New-project","owner":"juicevik","repo":"New-project","branch":"main","bootstrap_url":"github-bootstrap.json","workflow":"admin-command.yml","workflow_id":"admin-command.yml","pages_url":"https://admin.workerwp.store/","actions_url":"https://github.com/juicevik/New-project/actions/workflows/admin-command.yml","api_base":"https://api.github.com","roles":{"version":"github-admin-roles-v1","default_role":"viewer","users":{"juicevik":{"role":"admin","status":"active","capabilities":{"read":true,"write":true,"publish":true,"config":true,"media":true,"archive":true,"site_rebrand":true,"deploy":true,"roles":true}},"workerwp-editor":{"role":"editor","status":"active","capabilities":{"read":true,"write":true,"publish":true,"config":true,"media":true,"archive":true,"site_rebrand":true,"deploy":true,"roles":false}}}}}</script>
 </main>
 </body>
