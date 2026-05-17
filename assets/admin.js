@@ -4125,8 +4125,12 @@
     const githubRateMessage = githubState.rateLimitVisible
       ? githubState.rateLimitMessage
       : (isGithubMode() ? 'Загрузка лимитов...' : 'GitHub не подключен');
+    const statusMessage = summary.total_pages || summary.modules
+      ? (summary.total_pages || 0) + ' стр. · ' + (summary.modules || 0) + ' мод.'
+      : 'Ожидание';
 
     target.innerHTML = [
+      metricHtml('Статус', statusMessage),
       metricHtml('Pages', summary.total_pages || 0),
       metricHtml('Published', summary.published_pages || 0),
       metricHtml('Modules', summary.modules || 0),
@@ -4898,7 +4902,7 @@
     applyRolePermissionsVisibility(authState.actor);
     renderContractList(authContract);
     setSectionCounts(manifest, contracts);
-    setAdminBootStatus('Данные админки загружены: ' + ((manifest.pages || []).length) + ' страниц, ' + ((manifest.modules || []).length) + ' модулей');
+    setAdminBootStatus('Готово');
     wirePageFilters();
     bootComposer();
     wireEditorialWidget(adminState.actionContracts, adminState.authContract);
