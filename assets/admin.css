@@ -407,7 +407,13 @@ code {
 }
 
 .github-auth-gate {
-  min-height: min(72vh, 42rem);
+  position: relative;
+  isolation: isolate;
+  width: min(100%, 50rem);
+  min-height: calc(100svh - 7rem);
+  margin-inline: auto;
+  padding: clamp(2rem, 8vw, 4.5rem) var(--admin-space-4);
+  gap: clamp(1.15rem, 3vw, 1.9rem);
   place-items: center;
   align-content: center;
   border: 0;
@@ -415,33 +421,87 @@ code {
   box-shadow: none;
 }
 
+.github-auth-gate::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 50% auto auto 50%;
+  width: min(46rem, 92vw);
+  height: min(24rem, 64vh);
+  transform: translate(-50%, -50%);
+  border: 1px solid color-mix(in srgb, var(--admin-border) 74%, transparent);
+  border-radius: 28px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--admin-accent) 10%, transparent), transparent 46%),
+    linear-gradient(180deg, color-mix(in srgb, var(--admin-surface) 92%, transparent), color-mix(in srgb, var(--admin-surface-soft) 70%, transparent));
+  box-shadow: 0 28px 80px rgba(16, 35, 63, 0.12);
+}
+
+.github-auth-gate::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 50% auto auto 50%;
+  width: min(42rem, 86vw);
+  height: min(20rem, 54vh);
+  transform: translate(-50%, -50%);
+  border-radius: 24px;
+  background-image:
+    linear-gradient(90deg, color-mix(in srgb, var(--admin-border) 44%, transparent) 1px, transparent 1px),
+    linear-gradient(180deg, color-mix(in srgb, var(--admin-border) 38%, transparent) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(180deg, transparent, #000 18%, #000 82%, transparent);
+  opacity: 0.42;
+}
+
 .github-auth-gate h1 {
   margin: 0;
-  color: var(--admin-text);
-  font-size: clamp(2.1rem, 7vw, 4.6rem);
-  line-height: 1;
+  color: color-mix(in srgb, var(--admin-text) 94%, var(--admin-accent));
+  font-size: clamp(2.65rem, 8vw, 5.25rem);
+  font-weight: 900;
+  line-height: 0.94;
   text-align: center;
+  text-wrap: balance;
+}
+
+.github-auth-form {
+  width: min(100%, 37rem);
 }
 
 .github-auth-card {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 24rem) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--admin-space-2);
-  width: min(100%, 34rem);
-  padding: var(--admin-space-2);
-  border: 1px solid var(--admin-border);
-  border-radius: calc(var(--admin-radius-card) + 6px);
-  background: color-mix(in srgb, var(--admin-surface) 94%, transparent);
-  box-shadow: var(--admin-shadow);
+  width: 100%;
+  padding: 0.45rem;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--admin-border) 86%, var(--admin-accent));
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--admin-surface) 98%, transparent), color-mix(in srgb, var(--admin-surface-soft) 76%, transparent));
+  box-shadow:
+    0 18px 45px rgba(16, 35, 63, 0.12),
+    inset 0 1px 0 color-mix(in srgb, #ffffff 70%, transparent);
+}
+
+.github-auth-card::before {
+  content: "";
+  position: absolute;
+  inset: 0.5rem auto 0.5rem 0.5rem;
+  width: 0.25rem;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--admin-accent-strong), var(--admin-accent));
+  opacity: 0.95;
 }
 
 .github-auth-card input {
   min-width: 0;
-  min-height: 3rem;
-  padding-inline: var(--admin-space-4);
+  min-height: 3.55rem;
+  padding-inline: calc(var(--admin-space-5) + 0.35rem) var(--admin-space-4);
   border: 1px solid transparent;
-  border-radius: var(--admin-radius-control);
-  background: var(--admin-surface-soft);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--admin-surface-soft) 86%, var(--admin-surface));
   color: var(--admin-text);
   font: inherit;
   font-weight: 800;
@@ -449,15 +509,34 @@ code {
 }
 
 .github-auth-card button {
-  min-height: 3rem;
-  padding-inline: var(--admin-space-5);
+  min-height: 3.55rem;
+  padding-inline: clamp(1.35rem, 4vw, 2.4rem);
   border: 1px solid var(--admin-accent-strong);
-  border-radius: var(--admin-radius-control);
-  background: var(--admin-accent-strong);
+  border-radius: 13px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--admin-accent-strong) 92%, #ffffff), var(--admin-accent-strong));
   color: var(--admin-surface);
   cursor: pointer;
   font: inherit;
   font-weight: 900;
+  box-shadow: 0 12px 26px color-mix(in srgb, var(--admin-accent-strong) 24%, transparent);
+  transition: transform 160ms ease, box-shadow 160ms ease, filter 160ms ease;
+}
+
+.github-auth-card button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 16px 32px color-mix(in srgb, var(--admin-accent-strong) 30%, transparent);
+  filter: saturate(1.06);
+}
+
+.github-auth-card button:active {
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .github-auth-card button {
+    transition: none;
+  }
 }
 
 .admin-gated {
@@ -482,6 +561,12 @@ code {
   margin: var(--admin-space-3);
   background: var(--admin-surface);
   box-shadow: none;
+}
+
+.admin-spoiler--main {
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--admin-accent) 7%, transparent), transparent 46%),
+    var(--admin-surface);
 }
 
 .admin-spoiler--nested > summary {
@@ -583,6 +668,24 @@ code {
 
 .metric {
   padding: var(--admin-space-4);
+}
+
+.metric--github-rate {
+  grid-column: span 2;
+  border-color: color-mix(in srgb, var(--admin-accent) 34%, var(--admin-border));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--admin-accent) 8%, transparent), transparent 52%),
+    var(--admin-surface);
+}
+
+.metric--github-rate strong {
+  font-size: clamp(0.95rem, 2vw, 1.12rem);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.metric--github-rate[data-rate-state="pending"] strong {
+  color: var(--admin-muted);
 }
 
 .metric span,
@@ -2190,6 +2293,14 @@ code {
 
   .github-auth-card {
     grid-template-columns: 1fr;
+  }
+
+  .github-auth-card button {
+    width: 100%;
+  }
+
+  .metric--github-rate {
+    grid-column: auto;
   }
 
   .account-toggle {

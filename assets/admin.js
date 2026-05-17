@@ -227,7 +227,8 @@
     });
 
     panels.forEach((panel) => {
-      panel.hidden = visible === false;
+      panel.hidden = false;
+      panel.dataset.rateState = visible === false ? 'pending' : 'ready';
     });
   }
 
@@ -1511,20 +1512,21 @@
   }
 
   function setDesignStatus(message) {
-    const status = byId('admin-design-status');
+    const statuses = document.querySelectorAll('[data-design-status]');
 
-    if (status) {
+    statuses.forEach((status) => {
       status.value = message;
       status.textContent = message;
-    }
+    });
   }
 
   function setDesignOutput(payload) {
-    const output = byId('admin-design-output');
+    const outputs = document.querySelectorAll('[data-design-output]');
+    const value = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
 
-    if (output) {
-      output.value = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
-    }
+    outputs.forEach((output) => {
+      output.value = value;
+    });
   }
 
   function designEndpoint(name) {
@@ -3731,8 +3733,13 @@
     return /^#[0-9a-fA-F]{3,8}$/.test(normalized) ? normalized : fallback;
   }
 
-  function generatedFaviconSvg() {
-    const seedField = byId('admin-design-favicon-seed');
+  function faviconToolRoot(target) {
+    return target && typeof target.closest === 'function' ? target.closest('[data-design-favicon-tool]') || document : document;
+  }
+
+  function generatedFaviconSvg(root) {
+    const scope = root || document;
+    const seedField = scope.querySelector('[data-design-favicon-seed]') || byId('admin-design-favicon-seed');
     const brandField = byId('admin-design-brand');
     const accentField = byId('admin-design-accent');
     const surfaceField = byId('admin-design-surface');
@@ -3748,8 +3755,9 @@
       + '</svg>';
   }
 
-  function applyFaviconOnlyUpload() {
-    const selected = document.querySelector('[data-design-favicon-only]');
+  function applyFaviconOnlyUpload(event) {
+    const root = faviconToolRoot(event && event.currentTarget ? event.currentTarget : null);
+    const selected = root.querySelector('[data-design-favicon-only]');
 
     if (!selected || !selected.files || selected.files.length === 0) {
       setDesignStatus('Выберите файл favicon для локальной смены');
@@ -3767,8 +3775,9 @@
     reader.readAsDataURL(file);
   }
 
-  function generateAndApplyFavicon() {
-    const svg = generatedFaviconSvg();
+  function generateAndApplyFavicon(event) {
+    const root = faviconToolRoot(event && event.currentTarget ? event.currentTarget : null);
+    const svg = generatedFaviconSvg(root);
 
     uploadAndApplyFavicon('favicon-local-' + Date.now() + '.svg', window.btoa(svg), 'Сгенерированный favicon');
   }
@@ -3816,8 +3825,8 @@
     const rollback = generator.querySelector('[data-design-rollback]');
     const deploy = generator.querySelector('[data-design-deploy]');
     const upload = generator.querySelector('[data-design-upload-run]');
-    const faviconApply = generator.querySelector('[data-design-favicon-apply]');
-    const faviconGenerate = generator.querySelector('[data-design-favicon-generate]');
+    const faviconApplyButtons = document.querySelectorAll('[data-design-favicon-apply]');
+    const faviconGenerateButtons = document.querySelectorAll('[data-design-favicon-generate]');
     const domainDryRun = siteLaunch ? siteLaunch.querySelector('[data-domain-rebrand-dry-run]') : null;
     const domainApply = siteLaunch ? siteLaunch.querySelector('[data-domain-rebrand-apply]') : null;
     const domainField = byId('admin-domain-name');
@@ -3928,13 +3937,8 @@
       upload.addEventListener('click', uploadDesignAssets);
     }
 
-    if (faviconApply) {
-      faviconApply.addEventListener('click', applyFaviconOnlyUpload);
-    }
-
-    if (faviconGenerate) {
-      faviconGenerate.addEventListener('click', generateAndApplyFavicon);
-    }
+    faviconApplyButtons.forEach((button) => button.addEventListener('click', applyFaviconOnlyUpload));
+    faviconGenerateButtons.forEach((button) => button.addEventListener('click', generateAndApplyFavicon));
 
     if (domainDryRun) {
       domainDryRun.addEventListener('click', () => runSiteRebrandAction(readAuthContract() || {}, true));
@@ -4118,12 +4122,16 @@
       return;
     }
 
+    const githubRateMessage = githubState.rateLimitVisible
+      ? githubState.rateLimitMessage
+      : (isGithubMode() ? 'Загрузка лимитов...' : 'GitHub не подключен');
+
     target.innerHTML = [
       metricHtml('Pages', summary.total_pages || 0),
       metricHtml('Published', summary.published_pages || 0),
       metricHtml('Modules', summary.modules || 0),
       metricHtml('Version', manifest && manifest.version ? manifest.version : 'n/a'),
-      '<article class="metric metric--github-rate" data-github-rate-limit' + (githubState.rateLimitVisible ? '' : ' hidden') + '><span>GitHub API</span><strong data-github-rate-limit-value>' + escapeHtml(githubState.rateLimitMessage) + '</strong></article>'
+      '<article class="metric metric--github-rate" data-github-rate-limit data-rate-state="' + (githubState.rateLimitVisible ? 'ready' : 'pending') + '"><span>GitHub лимиты</span><strong data-github-rate-limit-value>' + escapeHtml(githubRateMessage) + '</strong></article>'
     ].join('');
   }
 
@@ -4796,7 +4804,7 @@
     const productCards = contracts && Array.isArray(contracts.pages)
       ? contracts.pages.filter((page) => editorialContentTypeForPage(page) === 'product').length
       : 0;
-    const values = { editorial: editorialTypes, 'product-cards': productCards, 'role-permissions': 6, 'site-launch': 6, content: pages, workflow: actions + createTemplates, modules, design: 2, system, technical: pages + modules + actions };
+    const values = { 'main-workspace': editorialTypes + productCards, editorial: editorialTypes, 'product-cards': productCards, 'role-permissions': 6, 'site-launch': 6, content: pages, workflow: actions + createTemplates, modules, design: 2, system, technical: pages + modules + actions };
 
     Object.entries(values).forEach(([section, count]) => {
       const node = document.querySelector('[data-section-count="' + section + '"]');
@@ -4829,6 +4837,7 @@
     adminState.actionContracts = null;
     adminState.authContract = null;
     adminState.manifest = null;
+    designState.booted = false;
     resetEditorialWidgetState();
     setGatedVisible(false);
     setRolePermissionsShortcutVisible(false);
