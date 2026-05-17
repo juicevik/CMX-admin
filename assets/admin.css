@@ -1,22 +1,25 @@
 :root {
   color-scheme: light;
-  --admin-bg: #f4f7f6;
-  --admin-surface: #ffffff;
-  --admin-surface-soft: #edf4f2;
+  --admin-bg: #eef6f7;
+  --admin-surface: rgba(255, 255, 255, 0.88);
+  --admin-surface-solid: #ffffff;
+  --admin-surface-soft: #e7f4f5;
   --admin-text: #10233f;
   --admin-muted: #586d82;
-  --admin-border: #d6e2df;
+  --admin-border: #c9dddf;
   --admin-accent: #008b95;
   --admin-accent-strong: #006b74;
   --admin-warning: #b77a16;
-  --admin-grid-line: rgba(16, 35, 63, 0.035);
-  --admin-grid-line-strong: rgba(16, 35, 63, 0.03);
-  --admin-page-glow: transparent;
-  --admin-card-glow: rgba(16, 35, 63, 0.04);
+  --admin-grid-line: rgba(0, 139, 149, 0.065);
+  --admin-grid-line-strong: rgba(16, 35, 63, 0.025);
+  --admin-page-glow:
+    radial-gradient(circle at 84% 9%, rgba(0, 139, 149, 0.13), transparent 27rem),
+    radial-gradient(circle at 14% 18%, rgba(29, 117, 216, 0.08), transparent 20rem);
+  --admin-card-glow: rgba(0, 139, 149, 0.16);
   --admin-radius-card: 8px;
   --admin-radius-control: 6px;
-  --admin-shadow: 0 14px 32px rgba(16, 35, 63, 0.08);
-  --admin-container: 76rem;
+  --admin-shadow: 0 20px 45px rgba(16, 35, 63, 0.09), 0 0 0 1px rgba(255, 255, 255, 0.72) inset;
+  --admin-container: 96rem;
   --admin-space-1: 0.25rem;
   --admin-space-2: 0.5rem;
   --admin-space-3: 0.75rem;
@@ -163,7 +166,15 @@ code {
   grid-template-columns: auto minmax(16rem, 1fr) auto;
   align-items: center;
   gap: clamp(0.85rem, 2vw, var(--admin-space-5));
-  padding-block: var(--admin-space-4) var(--admin-space-3);
+  margin-top: 0.3rem;
+  padding: 0.95rem;
+  border: 1px solid color-mix(in srgb, var(--admin-border) 80%, transparent);
+  border-radius: 22px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.78), rgba(232, 245, 246, 0.72)),
+    var(--admin-surface);
+  box-shadow: var(--admin-shadow);
+  backdrop-filter: blur(18px);
   position: relative;
   z-index: 20;
 }
@@ -181,10 +192,13 @@ code {
   place-items: center;
   width: 2.5rem;
   height: 2.5rem;
-  border: 1px solid var(--admin-border);
+  border: 1px solid color-mix(in srgb, var(--admin-accent) 42%, var(--admin-border));
   border-radius: var(--admin-radius-control);
-  background: var(--admin-surface);
-  box-shadow: var(--admin-shadow);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(226, 245, 247, 0.9));
+  box-shadow:
+    0 12px 28px rgba(0, 139, 149, 0.14),
+    0 0 0 1px rgba(255, 255, 255, 0.72) inset;
   color: var(--admin-accent-strong);
   font-size: 0.75rem;
   font-weight: 800;
@@ -201,14 +215,23 @@ code {
   flex-wrap: wrap;
   gap: 0.35rem;
   align-items: center;
+  justify-content: center;
   min-width: 0;
+  padding: 0.35rem;
+  border: 1px solid color-mix(in srgb, var(--admin-border) 78%, transparent);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(231, 244, 245, 0.66));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.82);
 }
 
 .admin-nav a {
+  position: relative;
   display: inline-flex;
   align-items: center;
+  gap: 0.5rem;
   min-height: 2.4rem;
-  padding-inline: 0.65rem;
+  padding-inline: 0.85rem;
   border-radius: var(--admin-radius-control);
   color: var(--admin-text);
   font-size: 0.94rem;
@@ -223,8 +246,46 @@ code {
 }
 
 .admin-nav a[aria-current="page"] {
-  background: var(--admin-text);
-  color: #ffffff;
+  background: color-mix(in srgb, var(--admin-accent) 10%, transparent);
+  color: var(--admin-text);
+}
+
+.admin-nav a[href="#admin-editorial"]::before {
+  content: "✎";
+}
+
+.admin-nav a[href="#admin-product-cards"]::before {
+  content: "◇";
+}
+
+.admin-nav a[href="#admin-site-launch"]::before {
+  content: "+";
+}
+
+.admin-nav a[href="#admin-design"]::before {
+  content: "◌";
+}
+
+.admin-nav a[href="#admin-technical"]::before {
+  content: "⚙";
+}
+
+.admin-nav a::before {
+  color: var(--admin-accent-strong);
+  font-size: 1rem;
+  font-weight: 800;
+}
+
+.admin-nav a[aria-current="page"]::after {
+  content: "";
+  position: absolute;
+  left: 0.85rem;
+  right: 0.85rem;
+  bottom: -0.42rem;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--admin-accent);
+  box-shadow: 0 0 14px rgba(0, 139, 149, 0.32);
 }
 
 .admin-topbar__actions {
@@ -269,8 +330,8 @@ code {
   padding: 0.45rem var(--admin-space-3);
   border: 1px solid var(--admin-border);
   border-radius: 999px;
-  background: var(--admin-surface);
-  box-shadow: var(--admin-shadow);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 12px 28px rgba(16, 35, 63, 0.08);
   color: var(--admin-text);
   cursor: pointer;
   font: inherit;
@@ -304,8 +365,8 @@ code {
   padding: 0.42rem var(--admin-space-3);
   border: 1px solid var(--admin-border);
   border-radius: var(--admin-radius-control);
-  background: var(--admin-surface);
-  box-shadow: var(--admin-shadow);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 12px 28px rgba(16, 35, 63, 0.08);
   color: var(--admin-text);
   cursor: pointer;
   font: inherit;
@@ -372,7 +433,18 @@ code {
 }
 
 .admin-shell {
-  padding-block: var(--admin-space-6);
+  margin-top: 0.9rem;
+  padding: clamp(1.5rem, 3vw, 3rem);
+  border: 1px solid color-mix(in srgb, var(--admin-border) 78%, transparent);
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at 93% 8%, rgba(0, 139, 149, 0.12), transparent 22rem),
+    linear-gradient(90deg, rgba(0, 139, 149, 0.045) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(16, 35, 63, 0.025) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(238, 246, 247, 0.9));
+  background-size: auto, 48px 48px, 48px 48px, auto;
+  box-shadow: var(--admin-shadow);
+  overflow: hidden;
 }
 
 .admin-hero,
@@ -727,11 +799,44 @@ code {
 }
 
 .metric {
+  position: relative;
   display: grid;
   align-content: start;
-  min-height: 5.25rem;
-  padding: 0.85rem 0.95rem;
-  box-shadow: 0 6px 14px rgba(16, 35, 63, 0.04);
+  min-height: 8.25rem;
+  padding: 1rem 1rem 0.9rem;
+  overflow: hidden;
+  border-color: color-mix(in srgb, var(--admin-accent) 22%, var(--admin-border));
+  background:
+    radial-gradient(circle at 14% 18%, rgba(0, 139, 149, 0.12), transparent 5rem),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.94), rgba(232, 245, 246, 0.84));
+  box-shadow:
+    0 15px 34px rgba(16, 35, 63, 0.075),
+    inset 0 1px 0 rgba(255, 255, 255, 0.86);
+}
+
+.metric::before {
+  content: "";
+  width: 2.25rem;
+  height: 2.25rem;
+  margin-bottom: 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--admin-accent) 52%, var(--admin-border));
+  border-radius: 999px;
+  background:
+    radial-gradient(circle, rgba(0, 139, 149, 0.16), rgba(255, 255, 255, 0.82));
+  box-shadow: 0 10px 24px rgba(0, 139, 149, 0.12);
+}
+
+.metric::after {
+  content: "";
+  align-self: end;
+  width: min(100%, 9rem);
+  height: 1.1rem;
+  margin-top: auto;
+  background:
+    radial-gradient(circle at 100% 66%, var(--admin-accent) 0 0.14rem, transparent 0.15rem),
+    url("data:image/svg+xml,%3Csvg width='170' height='28' viewBox='0 0 170 28' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 16c12 5 20 7 30 3s16 6 31 1 23-14 39-6 24 14 40 7 22 2 30-1' fill='none' stroke='%23008b95' stroke-width='2' stroke-linecap='round' opacity='.9'/%3E%3Cpath d='M0 16c12 5 20 7 30 3s16 6 31 1 23-14 39-6 24 14 40 7 22 2 30-1' fill='none' stroke='%23008b95' stroke-width='8' stroke-linecap='round' opacity='.08'/%3E%3C/svg%3E")
+      left center / 100% 100% no-repeat;
+  filter: drop-shadow(0 0 6px rgba(0, 139, 149, 0.18));
 }
 
 .metric--status {
@@ -744,6 +849,10 @@ code {
   background:
     linear-gradient(135deg, color-mix(in srgb, var(--admin-accent) 8%, transparent), transparent 52%),
     var(--admin-surface);
+}
+
+.metric--github-rate::after {
+  display: none;
 }
 
 .metric--github-rate h1 {
@@ -780,7 +889,8 @@ code {
 .metric strong {
   display: block;
   margin-top: 0.2rem;
-  font-size: clamp(1.05rem, 1.8vw, 1.35rem);
+  color: var(--admin-accent-strong);
+  font-size: clamp(1.35rem, 2.4vw, 2rem);
   line-height: 1.12;
   overflow-wrap: anywhere;
 }
@@ -795,7 +905,8 @@ code {
 }
 
 .metric--status strong {
-  font-size: clamp(0.98rem, 1.4vw, 1.16rem);
+  color: var(--admin-text);
+  font-size: clamp(0.86rem, 1.1vw, 1rem);
 }
 
 .admin-section {
