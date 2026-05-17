@@ -1681,6 +1681,23 @@
     }
   }
 
+  function setServerMaintenanceStatus(message) {
+    const status = byId('admin-server-maintenance-status');
+
+    if (status) {
+      status.value = message;
+      status.textContent = message;
+    }
+  }
+
+  function setServerMaintenanceOutput(payload) {
+    const output = byId('admin-server-maintenance-output');
+
+    if (output) {
+      output.value = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
+    }
+  }
+
   function slugFromDomainValue(value) {
     const normalized = String(value || '')
       .trim()
@@ -1855,6 +1872,47 @@
       setDomainStatus('Site profile endpoint недоступен');
     } finally {
       setStatusBusy('admin-domain-status', false);
+    }
+  }
+
+  async function runServerMaintenanceAction(action) {
+    if (!isGithubMode()) {
+      setServerMaintenanceStatus('Server maintenance доступен только в GitHub Pages-админке.');
+      setServerMaintenanceOutput({ ok: false, issues: ['github_pages_admin_required'] });
+      return;
+    }
+
+    const targetField = byId('admin-server-maintenance-target');
+    const purgeField = byId('admin-server-maintenance-purge');
+    const target = targetField && targetField.value.trim() ? targetField.value.trim() : 'production';
+    const purgeRuntimePackages = purgeField ? purgeField.checked : true;
+    const actionLabels = {
+      backup: 'создать backup VPS',
+      reset_static_host: 'очистить static host',
+      backup_and_reset_static_host: 'создать backup и очистить static host'
+    };
+
+    if (action !== 'backup' && !window.confirm('Запустить обслуживание VPS: ' + (actionLabels[action] || action) + '? Это изменит состояние сервера.')) {
+      setServerMaintenanceStatus('Операция обслуживания отменена');
+      return;
+    }
+
+    setServerMaintenanceStatus('Запускаю server-maintenance workflow...');
+    setStatusBusy('admin-server-maintenance-status', true);
+
+    try {
+      const config = readGithubConfig();
+      const workflow = config.server_maintenance_workflow_id || 'server-maintenance.yml';
+      const result = await githubDispatchWorkflow(workflow, {
+        action,
+        target,
+        purge_runtime_packages: purgeRuntimePackages ? 'true' : 'false'
+      }, config.server_maintenance_actions_url || '');
+
+      setServerMaintenanceOutput(result);
+      setServerMaintenanceStatus(result.ok ? 'Server maintenance workflow запущен.' : 'Server maintenance workflow не запущен.');
+    } finally {
+      setStatusBusy('admin-server-maintenance-status', false);
     }
   }
 
@@ -3932,6 +3990,9 @@
     const faviconGenerateButtons = document.querySelectorAll('[data-design-favicon-generate]');
     const domainDryRun = siteLaunch ? siteLaunch.querySelector('[data-domain-rebrand-dry-run]') : null;
     const domainApply = siteLaunch ? siteLaunch.querySelector('[data-domain-rebrand-apply]') : null;
+    const maintenanceBackup = siteLaunch ? siteLaunch.querySelector('[data-server-maintenance-backup]') : null;
+    const maintenanceReset = siteLaunch ? siteLaunch.querySelector('[data-server-maintenance-reset]') : null;
+    const maintenanceBackupReset = siteLaunch ? siteLaunch.querySelector('[data-server-maintenance-backup-reset]') : null;
     const domainField = byId('admin-domain-name');
     const routeSeedField = byId('admin-domain-route-seed');
 
@@ -4049,6 +4110,18 @@
 
     if (domainApply) {
       domainApply.addEventListener('click', () => runSiteRebrandAction(readAuthContract() || {}, false));
+    }
+
+    if (maintenanceBackup) {
+      maintenanceBackup.addEventListener('click', () => runServerMaintenanceAction('backup'));
+    }
+
+    if (maintenanceReset) {
+      maintenanceReset.addEventListener('click', () => runServerMaintenanceAction('reset_static_host'));
+    }
+
+    if (maintenanceBackupReset) {
+      maintenanceBackupReset.addEventListener('click', () => runServerMaintenanceAction('backup_and_reset_static_host'));
     }
 
     if (domainField) {
@@ -5223,6 +5296,71 @@
         ok: false,
         action: 'github_workflow_dispatch',
         command,
+        issues: ['GitHub API request failed: ' + (error && error.message ? error.message : 'network error')]
+      };
+    }
+  }
+
+  async function githubDispatchWorkflow(workflow, inputs, actionsUrl) {
+    const config = readGithubConfig();
+    const repository = config.repository || '';
+    const branchInput = document.querySelector('[data-github-branch]');
+    const ref = branchInput && branchInput.value ? branchInput.value.trim() : (config.branch || 'main');
+    const normalizedInputs = {};
+
+    Object.entries(inputs || {}).forEach(([key, value]) => {
+      normalizedInputs[key] = String(value);
+    });
+
+    if (!githubToken()) {
+      return {
+        ok: false,
+        issues: ['GitHub token не подключен. Подключите token на экране входа.']
+      };
+    }
+
+    try {
+      const response = await fetch(githubApiUrl('/repos/' + repository + '/actions/workflows/' + workflow + '/dispatches'), {
+        method: 'POST',
+        headers: Object.assign({}, githubHeaders(), {
+          'Content-Type': 'application/json'
+        }),
+        body: JSON.stringify({ ref, inputs: normalizedInputs })
+      });
+      const responsePayload = response.status === 204 ? {} : await readResponseJson(response);
+
+      if (response.ok) {
+        return {
+          ok: true,
+          action: 'github_workflow_dispatch',
+          workflow,
+          data: {
+            ref,
+            inputs: normalizedInputs,
+            actions_url: actionsUrl || ('https://github.com/' + repository + '/actions/workflows/' + workflow)
+          },
+          warnings: ['GitHub принял workflow асинхронно. Дождитесь завершения Actions перед следующим шагом.']
+        };
+      }
+
+      return {
+        ok: false,
+        http_status: response.status,
+        action: 'github_workflow_dispatch',
+        workflow,
+        errors: [{
+          field: 'github_actions',
+          code: 'dispatch_failed',
+          human: responsePayload.message || 'GitHub workflow_dispatch failed.',
+          ai_hint: 'Check token permissions: Actions write, workflow file name, branch, and environment secrets.'
+        }],
+        data: responsePayload
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        action: 'github_workflow_dispatch',
+        workflow,
         issues: ['GitHub API request failed: ' + (error && error.message ? error.message : 'network error')]
       };
     }
