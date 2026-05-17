@@ -59,8 +59,11 @@
     config: null,
     connected: false,
     actorLogin: '',
-    actorProfile: null
+    actorProfile: null,
+    rateLimitMessage: 'Лимиты не загружены',
+    rateLimitVisible: false
   };
+  const adminThemeStorageKey = 'cms.admin.theme';
 
   function readJsonScript(id, errorLabel) {
     const node = document.getElementById(id);
@@ -99,6 +102,103 @@
     return document.body && document.body.dataset.adminPage === 'github-pages';
   }
 
+  function preferredAdminTheme() {
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+
+  function readStoredAdminTheme() {
+    try {
+      return localStorage.getItem(adminThemeStorageKey);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function writeStoredAdminTheme(mode) {
+    try {
+      if (mode === 'dark' || mode === 'light') {
+        localStorage.setItem(adminThemeStorageKey, mode);
+      } else {
+        localStorage.removeItem(adminThemeStorageKey);
+      }
+    } catch (error) {
+      // Browser privacy settings may block localStorage; system theme still works.
+    }
+  }
+
+  function updateAdminThemeToggle(theme, automatic) {
+    const toggle = document.querySelector('[data-admin-theme-toggle]');
+    const icon = document.querySelector('[data-admin-theme-icon]');
+    const label = document.querySelector('[data-admin-theme-label]');
+    const isDark = theme === 'dark';
+
+    if (toggle) {
+      toggle.setAttribute('aria-pressed', isDark ? 'true' : 'false');
+      toggle.setAttribute('title', automatic ? 'Тема по системе' : 'Тема задана вручную');
+    }
+
+    if (icon) {
+      icon.textContent = isDark ? '☾' : '☀';
+    }
+
+    if (label) {
+      label.textContent = isDark ? 'Темная' : 'Светлая';
+    }
+  }
+
+  function applyAdminTheme(mode, persist) {
+    const root = document.documentElement;
+    const normalized = mode === 'dark' || mode === 'light' ? mode : 'system';
+    const theme = normalized === 'system' ? preferredAdminTheme() : normalized;
+
+    if (normalized === 'system') {
+      delete root.dataset.adminTheme;
+      if (persist) {
+        writeStoredAdminTheme('system');
+      }
+    } else {
+      root.dataset.adminTheme = normalized;
+      if (persist) {
+        writeStoredAdminTheme(normalized);
+      }
+    }
+
+    updateAdminThemeToggle(theme, normalized === 'system');
+  }
+
+  function bootAdminTheme() {
+    const stored = readStoredAdminTheme();
+
+    applyAdminTheme(stored || 'system', false);
+
+    document.querySelectorAll('[data-admin-theme-toggle]').forEach((toggle) => {
+      if (toggle.dataset.adminThemeBound === 'true') {
+        return;
+      }
+
+      toggle.dataset.adminThemeBound = 'true';
+      toggle.addEventListener('click', () => {
+        const current = document.documentElement.dataset.adminTheme || preferredAdminTheme();
+        applyAdminTheme(current === 'dark' ? 'light' : 'dark', true);
+      });
+    });
+
+    if (window.matchMedia) {
+      const media = window.matchMedia('(prefers-color-scheme: dark)');
+      const syncSystemTheme = () => {
+        if (!readStoredAdminTheme()) {
+          applyAdminTheme('system', false);
+        }
+      };
+
+      if (typeof media.addEventListener === 'function') {
+        media.addEventListener('change', syncSystemTheme);
+      } else if (typeof media.addListener === 'function') {
+        media.addListener(syncSystemTheme);
+      }
+    }
+  }
+
   function githubSessionKey() {
     const config = readGithubConfig();
     const repository = config && config.repository ? String(config.repository) : 'cms';
@@ -116,16 +216,19 @@
   }
 
   function setGithubRateLimit(message, visible) {
-    const panel = document.querySelector('[data-github-rate-limit]');
-    const value = document.querySelector('[data-github-rate-limit-value]');
+    const panels = document.querySelectorAll('[data-github-rate-limit]');
+    const values = document.querySelectorAll('[data-github-rate-limit-value]');
 
-    if (value) {
+    githubState.rateLimitMessage = message;
+    githubState.rateLimitVisible = visible !== false;
+
+    values.forEach((value) => {
       value.textContent = message;
-    }
+    });
 
-    if (panel) {
+    panels.forEach((panel) => {
       panel.hidden = visible === false;
-    }
+    });
   }
 
   function githubToken() {
@@ -313,6 +416,7 @@
   function setGatedVisible(visible) {
     const gate = document.querySelector('[data-auth-gate]');
     const gated = document.querySelector('[data-admin-gated]');
+    const authTopbar = document.querySelector('[data-auth-topbar]');
 
     if (gate) {
       gate.hidden = visible;
@@ -320,6 +424,10 @@
 
     if (gated) {
       gated.hidden = !visible;
+    }
+
+    if (authTopbar) {
+      authTopbar.hidden = !visible;
     }
   }
 
@@ -3667,7 +3775,9 @@
 
   function renderDesignPanel(bootstrap) {
     const panel = document.querySelector('[data-section-panel="design"]');
+    const siteLaunchPanel = document.querySelector('[data-section-panel="site-launch"]');
     const generator = document.querySelector('[data-design-generator]');
+    const siteLaunch = document.querySelector('[data-domain-design-generator]');
     const actor = authState.actor || (bootstrap && bootstrap.actor) || {};
     const runtime = bootstrap && bootstrap.manifest ? bootstrap.manifest.runtime : adminState.manifest && adminState.manifest.runtime;
     const roleCapabilities = runtime && runtime.capabilities && actor && actor.role
@@ -3680,6 +3790,9 @@
     }
 
     panel.hidden = !canDesign;
+    if (siteLaunchPanel) {
+      siteLaunchPanel.hidden = !canDesign;
+    }
 
     if (!canDesign) {
       setDesignStatus('Нет права design/config');
@@ -3705,8 +3818,8 @@
     const upload = generator.querySelector('[data-design-upload-run]');
     const faviconApply = generator.querySelector('[data-design-favicon-apply]');
     const faviconGenerate = generator.querySelector('[data-design-favicon-generate]');
-    const domainDryRun = generator.querySelector('[data-domain-rebrand-dry-run]');
-    const domainApply = generator.querySelector('[data-domain-rebrand-apply]');
+    const domainDryRun = siteLaunch ? siteLaunch.querySelector('[data-domain-rebrand-dry-run]') : null;
+    const domainApply = siteLaunch ? siteLaunch.querySelector('[data-domain-rebrand-apply]') : null;
     const domainField = byId('admin-domain-name');
     const routeSeedField = byId('admin-domain-route-seed');
 
@@ -4009,7 +4122,8 @@
       metricHtml('Pages', summary.total_pages || 0),
       metricHtml('Published', summary.published_pages || 0),
       metricHtml('Modules', summary.modules || 0),
-      metricHtml('Version', manifest && manifest.version ? manifest.version : 'n/a')
+      metricHtml('Version', manifest && manifest.version ? manifest.version : 'n/a'),
+      '<article class="metric metric--github-rate" data-github-rate-limit' + (githubState.rateLimitVisible ? '' : ' hidden') + '><span>GitHub API</span><strong data-github-rate-limit-value>' + escapeHtml(githubState.rateLimitMessage) + '</strong></article>'
     ].join('');
   }
 
@@ -4682,7 +4796,7 @@
     const productCards = contracts && Array.isArray(contracts.pages)
       ? contracts.pages.filter((page) => editorialContentTypeForPage(page) === 'product').length
       : 0;
-    const values = { editorial: editorialTypes, 'product-cards': productCards, 'role-permissions': 6, content: pages, workflow: actions + createTemplates, modules, design: 2, system, technical: pages + modules + actions };
+    const values = { editorial: editorialTypes, 'product-cards': productCards, 'role-permissions': 6, 'site-launch': 6, content: pages, workflow: actions + createTemplates, modules, design: 2, system, technical: pages + modules + actions };
 
     Object.entries(values).forEach(([section, count]) => {
       const node = document.querySelector('[data-section-count="' + section + '"]');
@@ -4761,6 +4875,9 @@
     adminState.authContract = authContract;
     setGatedVisible(true);
     renderAdminMetrics(manifest);
+    if (isGithubMode() && githubToken()) {
+      loadGithubRateLimit();
+    }
     renderTypeOptions(manifest.page_types || []);
     renderPages(manifest.pages || []);
     renderWorkflowActions(contracts);
@@ -5702,6 +5819,7 @@
   }
 
   document.addEventListener('DOMContentLoaded', () => {
+    bootAdminTheme();
     wireAccountMenu();
     wireRolePermissionsShortcut();
     wirePageFilters();
