@@ -115,6 +115,19 @@
     }
   }
 
+  function setGithubRateLimit(message, visible) {
+    const panel = document.querySelector('[data-github-rate-limit]');
+    const value = document.querySelector('[data-github-rate-limit-value]');
+
+    if (value) {
+      value.textContent = message;
+    }
+
+    if (panel) {
+      panel.hidden = visible === false;
+    }
+  }
+
   function githubToken() {
     return githubState.token || sessionStorage.getItem(githubSessionKey()) || '';
   }
@@ -132,6 +145,39 @@
       Authorization: 'Bearer ' + githubToken(),
       'X-GitHub-Api-Version': '2022-11-28'
     };
+  }
+
+  async function loadGithubRateLimit() {
+    if (!githubToken()) {
+      setGithubRateLimit('Лимиты не загружены', false);
+      return;
+    }
+
+    try {
+      const response = await fetch(githubApiUrl('/rate_limit'), {
+        method: 'GET',
+        headers: githubHeaders()
+      });
+      const payload = await readResponseJson(response);
+
+      if (!response.ok || !payload || !payload.resources) {
+        setGithubRateLimit('Лимиты GitHub API недоступны', true);
+        return;
+      }
+
+      const core = payload.resources.core || {};
+      const actions = payload.resources.actions || {};
+      const resetAt = core.reset ? new Date(Number(core.reset) * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'unknown';
+      const parts = [
+        'Core: ' + (core.remaining ?? '?') + '/' + (core.limit ?? '?'),
+        'Actions: ' + (actions.remaining ?? '?') + '/' + (actions.limit ?? '?'),
+        'reset: ' + resetAt
+      ];
+
+      setGithubRateLimit(parts.join(' · '), true);
+    } catch (error) {
+      setGithubRateLimit('Лимиты GitHub API недоступны', true);
+    }
   }
 
   const editableRoleCapabilities = ['write', 'publish', 'config', 'media', 'archive', 'site_rebrand', 'deploy'];
@@ -4727,6 +4773,7 @@
       }
 
       applyGithubActor(userPayload.login || '');
+      loadGithubRateLimit();
 
       return { ok: true, message: 'GitHub token проверен: ' + authState.actor.username + ' / ' + authState.actor.role + '.' };
     } catch (error) {
@@ -5474,6 +5521,7 @@
 
         clearAdminBootstrap('GitHub token удален из sessionStorage');
         setGithubStatus('GitHub token удален из текущего браузера.');
+        setGithubRateLimit('Лимиты не загружены', false);
       });
     }
 

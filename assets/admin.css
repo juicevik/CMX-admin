@@ -1882,6 +1882,23 @@ code {
   gap: var(--admin-space-4);
 }
 
+.github-rate-limit {
+  align-items: center;
+  background: rgba(15, 124, 129, 0.08);
+  border: 1px solid rgba(15, 124, 129, 0.22);
+  border-radius: var(--admin-radius-sm);
+  color: var(--admin-muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--admin-space-2);
+  justify-content: space-between;
+  padding: var(--admin-space-3) var(--admin-space-4);
+}
+
+.github-rate-limit strong {
+  color: var(--admin-text);
+}
+
 .checkbox-row {
   display: inline-flex;
   align-items: center;
