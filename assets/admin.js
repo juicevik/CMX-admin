@@ -720,6 +720,29 @@
     }
   }
 
+  function localeForLanguageFolder(languageFolder) {
+    const localization = adminState.manifest && adminState.manifest.localization
+      ? adminState.manifest.localization
+      : {};
+    const locales = Array.isArray(localization.locales) ? localization.locales : [];
+    const normalizedFolder = String(languageFolder || '').trim();
+
+    if (normalizedFolder === '') {
+      const defaultCode = String(localization.default_locale || '').trim();
+      const defaultEntry = locales.find((entry) => entry && entry.code === defaultCode)
+        || locales.find((entry) => entry && entry.folder === '');
+
+      return defaultEntry && defaultEntry.html_locale ? defaultEntry.html_locale : 'en-US';
+    }
+
+    const folderEntry = locales.find((entry) => entry && entry.folder === normalizedFolder)
+      || locales.find((entry) => entry && entry.code === normalizedFolder);
+
+    return folderEntry && folderEntry.html_locale
+      ? folderEntry.html_locale
+      : normalizedFolder + '-' + normalizedFolder.toUpperCase();
+  }
+
   function setCreatePageStatus(message) {
     const status = byId('admin-create-status');
 
@@ -761,7 +784,7 @@
     const languageFolder = byId('admin-create-locale-folder')
       ? normalizeSlug(byId('admin-create-locale-folder').value).slice(0, 2)
       : 'ru';
-    const locale = languageFolder === '' ? 'en-US' : languageFolder + '-' + languageFolder.toUpperCase();
+    const locale = localeForLanguageFolder(languageFolder);
 
     return {
       title,
