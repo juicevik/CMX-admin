@@ -3562,24 +3562,106 @@
         contents_base64: encoded
       }));
 
-      if (result.ok) {
-        const paths = Array.isArray(result.written_paths) ? result.written_paths : [];
-        const uploaded = paths.find((path) => typeof path === 'string' && path.indexOf('assets/media/design/') === 0);
-
-        if (uploaded) {
-          designState.uploads[kind] = '/' + uploaded;
-          designState.assetPaths[kind] = '/' + uploaded;
-          designState.assetModes[kind] = 'uploaded';
-          designState.dirty = false;
-        }
-
-        syncDesignFieldsFromTheme(result.theme);
-      }
+      rememberUploadedDesignAsset(result, kind);
 
       setDesignStatus(result.ok ? 'Design asset загружен' : 'Design asset не загружен');
     });
     reader.addEventListener('error', () => setDesignStatus('Design asset не прочитан'));
     reader.readAsDataURL(file);
+  }
+
+  function rememberUploadedDesignAsset(result, kind) {
+    if (!result || !result.ok) {
+      return;
+    }
+
+    const paths = Array.isArray(result.written_paths) ? result.written_paths : [];
+    const uploaded = paths.find((path) => typeof path === 'string' && path.indexOf('assets/media/design/') === 0);
+
+    if (uploaded) {
+      designState.uploads[kind] = '/' + uploaded;
+      designState.assetPaths[kind] = '/' + uploaded;
+      designState.assetModes[kind] = 'uploaded';
+      designState.dirty = false;
+    }
+
+    syncDesignFieldsFromTheme(result.theme);
+  }
+
+  async function uploadAndApplyFavicon(filename, contentsBase64, statusLabel) {
+    if (!await ensureDesignDraftSaved()) {
+      return;
+    }
+
+    const uploadResult = await runDesignAction('design_upload', designActionPayload('req-design-favicon-upload', {
+      kind: 'favicon',
+      filename,
+      contents_base64: contentsBase64
+    }));
+
+    rememberUploadedDesignAsset(uploadResult, 'favicon');
+
+    if (!uploadResult.ok) {
+      setDesignStatus((statusLabel || 'Favicon') + ' не загружен');
+      return;
+    }
+
+    const applyResult = await runDesignAction('design_apply', designActionPayload('req-design-favicon-apply'));
+
+    if (applyResult.ok) {
+      syncDesignFieldsFromTheme(applyResult.theme);
+      designState.dirty = false;
+    }
+
+    setDesignStatus(applyResult.ok ? (statusLabel || 'Favicon') + ' применен к статическому сайту' : (statusLabel || 'Favicon') + ' загружен, но не применен');
+  }
+
+  function safeFaviconColor(value, fallback) {
+    const normalized = String(value || '').trim();
+
+    return /^#[0-9a-fA-F]{3,8}$/.test(normalized) ? normalized : fallback;
+  }
+
+  function generatedFaviconSvg() {
+    const seedField = byId('admin-design-favicon-seed');
+    const brandField = byId('admin-design-brand');
+    const accentField = byId('admin-design-accent');
+    const surfaceField = byId('admin-design-surface');
+    const source = String((seedField && seedField.value) || (brandField && brandField.value) || 'CMS').replace(/[^a-z0-9]/gi, '').toUpperCase();
+    const initials = (source || 'CMS').slice(0, 2);
+    const accent = safeFaviconColor(accentField && accentField.value, '#007a7f');
+    const surface = safeFaviconColor(surfaceField && surfaceField.value, '#ffffff');
+
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
+      + '<rect width="64" height="64" rx="14" fill="' + accent + '"/>'
+      + '<path d="M44 13a15 15 0 0 0-18 18L13 44a6 6 0 0 0 7 7l13-13a15 15 0 0 0 18-18l-10 10-7-7z" fill="' + surface + '"/>'
+      + '<text x="32" y="54" text-anchor="middle" font-family="Arial,sans-serif" font-size="12" font-weight="800" fill="' + surface + '">' + initials + '</text>'
+      + '</svg>';
+  }
+
+  function applyFaviconOnlyUpload() {
+    const selected = document.querySelector('[data-design-favicon-only]');
+
+    if (!selected || !selected.files || selected.files.length === 0) {
+      setDesignStatus('Выберите файл favicon для локальной смены');
+      return;
+    }
+
+    const file = selected.files[0];
+    const reader = new FileReader();
+
+    reader.addEventListener('load', () => {
+      const encoded = String(reader.result || '').split(',')[1] || '';
+      uploadAndApplyFavicon(file.name, encoded, 'Favicon');
+    });
+    reader.addEventListener('error', () => setDesignStatus('Favicon не прочитан'));
+    reader.readAsDataURL(file);
+  }
+
+  function generateAndApplyFavicon() {
+    const svg = generatedFaviconSvg();
+
+    uploadAndApplyFavicon('favicon-local-' + Date.now() + '.svg', window.btoa(svg), 'Сгенерированный favicon');
   }
 
   function renderDesignPanel(bootstrap) {
@@ -3620,6 +3702,8 @@
     const rollback = generator.querySelector('[data-design-rollback]');
     const deploy = generator.querySelector('[data-design-deploy]');
     const upload = generator.querySelector('[data-design-upload-run]');
+    const faviconApply = generator.querySelector('[data-design-favicon-apply]');
+    const faviconGenerate = generator.querySelector('[data-design-favicon-generate]');
     const domainDryRun = generator.querySelector('[data-domain-rebrand-dry-run]');
     const domainApply = generator.querySelector('[data-domain-rebrand-apply]');
     const domainField = byId('admin-domain-name');
@@ -3728,6 +3812,14 @@
 
     if (upload) {
       upload.addEventListener('click', uploadDesignAssets);
+    }
+
+    if (faviconApply) {
+      faviconApply.addEventListener('click', applyFaviconOnlyUpload);
+    }
+
+    if (faviconGenerate) {
+      faviconGenerate.addEventListener('click', generateAndApplyFavicon);
     }
 
     if (domainDryRun) {
@@ -4866,8 +4958,12 @@
     }
   }
 
+  function activeAccountPanel() {
+    return byId('admin-account-panel') || byId('admin-github-account-panel');
+  }
+
   function setAccountPanelOpen(open) {
-    const panel = byId('admin-account-panel');
+    const panel = activeAccountPanel();
     const toggle = document.querySelector('[data-account-toggle]');
 
     if (panel) {
@@ -4905,9 +5001,9 @@
   }
 
   function wireAccountMenu() {
-    const menu = document.querySelector('[data-account-menu]');
+    const menu = document.querySelector('[data-account-menu], [data-account-menu-github]');
     const toggle = document.querySelector('[data-account-toggle]');
-    const panel = byId('admin-account-panel');
+    const panel = activeAccountPanel();
 
     if (!menu || !toggle || !panel) {
       return;
@@ -5472,8 +5568,26 @@
   function bootGithubAuth() {
     const form = document.querySelector('[data-github-auth]');
     const tokenInput = document.querySelector('[data-github-token]');
-    const disconnectButton = document.querySelector('[data-github-disconnect]');
+    const disconnectButtons = Array.from(document.querySelectorAll('[data-github-disconnect], [data-github-logout]'));
     const storedToken = sessionStorage.getItem(githubSessionKey()) || '';
+    const disconnectGithubSession = () => {
+      githubState.token = '';
+      githubState.connected = false;
+      githubState.actorLogin = '';
+      githubState.actorProfile = null;
+      authState.actor = null;
+      sessionStorage.removeItem(githubSessionKey());
+
+      if (tokenInput) {
+        tokenInput.value = '';
+      }
+
+      setAccountLabel('Token не подключен');
+      setAccountPanelOpen(false);
+      clearAdminBootstrap('GitHub token удален из sessionStorage');
+      setGithubStatus('GitHub token удален из текущего браузера.');
+      setGithubRateLimit('Лимиты не загружены', false);
+    };
 
     if (tokenInput && storedToken) {
       tokenInput.value = storedToken;
@@ -5506,24 +5620,7 @@
       });
     }
 
-    if (disconnectButton) {
-      disconnectButton.addEventListener('click', () => {
-        githubState.token = '';
-        githubState.connected = false;
-        githubState.actorLogin = '';
-        githubState.actorProfile = null;
-        authState.actor = null;
-        sessionStorage.removeItem(githubSessionKey());
-
-        if (tokenInput) {
-          tokenInput.value = '';
-        }
-
-        clearAdminBootstrap('GitHub token удален из sessionStorage');
-        setGithubStatus('GitHub token удален из текущего браузера.');
-        setGithubRateLimit('Лимиты не загружены', false);
-      });
-    }
+    disconnectButtons.forEach((button) => button.addEventListener('click', disconnectGithubSession));
 
     if (storedToken) {
       verifyGithubToken().then((verification) => {

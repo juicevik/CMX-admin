@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CMS-admin_v2</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2214%22%20fill%3D%22%23007a7f%22%2F%3E%3Cpath%20d%3D%22M43%2012a15%2015%200%200%200-17%2019L13%2044a6%206%200%200%200%207%207l13-13a15%2015%200%200%200%2019-17l-10%2010-8-8z%22%20fill%3D%22%23ffffff%22%2F%3E%3Ccircle%20cx%3D%2218%22%20cy%3D%2246%22%20r%3D%222.7%22%20fill%3D%22%23007a7f%22%2F%3E%3C%2Fsvg%3E" type="image/svg+xml">
 <link rel="stylesheet" href="assets/admin.css">
 <script src="assets/admin.js" defer></script>
 </head>
@@ -14,15 +15,14 @@
 <nav class="admin-nav" aria-label="Admin sections"><a href="#admin-editorial">Публикация</a><a href="#admin-product-cards">Карточки товаров</a><a href="#admin-design">Дизайн</a><a href="#admin-technical">Техническое</a></nav>
 <button type="button" class="role-permissions-shortcut" data-role-permissions-shortcut hidden aria-controls="admin-role-permissions">Права и редактор</button>
 <div class="account-menu account-menu--github" data-account-menu-github>
-<div class="account-toggle account-toggle--readonly"><span>GitHub</span><strong data-account-label>Token не подключен</strong></div>
+<button type="button" class="account-toggle" data-account-toggle aria-controls="admin-github-account-panel" aria-expanded="false"><span>GitHub</span><strong data-account-label>Token не подключен</strong></button>
+<div id="admin-github-account-panel" class="account-panel account-panel--github" hidden>
+<div class="account-panel__header"><h2>CMS-admin_v2</h2><p>Версия админки: <strong>Builder V2</strong></p></div>
+<button type="button" class="account-panel__logout" data-github-logout>Выход</button>
+</div>
 </div>
 </header>
 <main id="admin-main" class="admin-shell" tabindex="-1">
-<section class="admin-hero admin-hero--github">
-<p class="admin-kicker">CMS-admin_v2</p>
-<h1>Панель управления через GitHub Actions</h1>
-<p>Эта версия админки работает как статическая GitHub Pages-страница. Изменения контента отправляются в защищенный workflow, коммитятся в репозиторий и затем деплоятся статическим артефактом на VPS.</p>
-</section>
 <section class="admin-section auth-gate github-auth-gate" data-auth-gate data-github-auth-gate>
 <div class="admin-section__header"><h2>GitHub доступ</h2><p>Введите fine-grained token с правами Actions: write и Contents: write для репозитория. Токен хранится только в sessionStorage текущего браузера.</p></div>
 <form class="github-auth-form" data-github-auth autocomplete="off">
@@ -43,7 +43,7 @@
 </form>
 </section>
 <div data-admin-gated-root></div>
-<script type="application/json" id="admin-auth-contract">{"version":"admin-http-auth-v1","generated_at":"2026-05-17T02:40:00+00:00","cookie_name":"nutriscope_admin","csrf_header":"X-CSRF-Token","endpoints":{"bootstrap":{"method":"GET","path":"/admin/bootstrap","requires_cookie":true},"login":{"method":"POST","path":"/admin/auth/login","content_type":"application/json","body_fields":["request_id","username","password"]},"session":{"method":"GET","path":"/admin/auth/session","requires_cookie":true,"returns_csrf_token":true},"logout":{"method":"POST","path":"/admin/auth/logout","requires_cookie":true,"requires_csrf_header":true}}}</script>
+<script type="application/json" id="admin-auth-contract">{"version":"admin-http-auth-v1","generated_at":"2026-05-17T08:09:06+00:00","cookie_name":"nutriscope_admin","csrf_header":"X-CSRF-Token","endpoints":{"bootstrap":{"method":"GET","path":"/admin/bootstrap","requires_cookie":true},"login":{"method":"POST","path":"/admin/auth/login","content_type":"application/json","body_fields":["request_id","username","password"]},"session":{"method":"GET","path":"/admin/auth/session","requires_cookie":true,"returns_csrf_token":true},"logout":{"method":"POST","path":"/admin/auth/logout","requires_cookie":true,"requires_csrf_header":true}}}</script>
 <script type="application/json" id="admin-github-config">{"version":"github-admin-v1","repository":"juicevik/New-project","owner":"juicevik","repo":"New-project","branch":"main","bootstrap_url":"github-bootstrap.json","workflow":"admin-command.yml","workflow_id":"admin-command.yml","pages_url":"https://juicevik.github.io/New-project/","actions_url":"https://github.com/juicevik/New-project/actions/workflows/admin-command.yml","api_base":"https://api.github.com","roles":{"version":"github-admin-roles-v1","default_role":"viewer","users":{"juicevik":{"role":"admin","status":"active","capabilities":{"read":true,"write":true,"publish":true,"config":true,"media":true,"archive":true,"site_rebrand":true,"deploy":true,"roles":true}},"workerwp-editor":{"role":"editor","status":"active","capabilities":{"read":true,"write":true,"publish":true,"config":true,"media":true,"archive":true,"site_rebrand":true,"deploy":true,"roles":false}}}}}</script>
 </main>
 </body>

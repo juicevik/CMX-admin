@@ -256,6 +256,21 @@ code {
   font-size: 0.86rem;
 }
 
+.account-panel--github {
+  width: min(20rem, calc(100vw - 2rem));
+}
+
+.account-panel__logout {
+  min-height: 2.5rem;
+  border: 1px solid var(--admin-accent-strong);
+  border-radius: var(--admin-radius-control);
+  background: var(--admin-accent-strong);
+  color: #ffffff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 900;
+}
+
 .admin-shell {
   padding-block: var(--admin-space-6);
 }
@@ -1447,6 +1462,69 @@ code {
 
 .design-history a[hidden] {
   display: none;
+}
+
+.design-favicon-tool {
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-card);
+  background: var(--admin-surface-muted);
+  padding: var(--admin-space-4);
+}
+
+.design-favicon-tool summary {
+  cursor: pointer;
+  font-size: 0.96rem;
+  font-weight: 900;
+}
+
+.design-favicon-tool__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  align-items: end;
+  gap: var(--admin-space-3);
+  margin-top: var(--admin-space-3);
+}
+
+.design-favicon-tool__grid label {
+  display: grid;
+  gap: var(--admin-space-2);
+  min-width: 0;
+  color: var(--admin-text);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.design-favicon-tool__grid input {
+  min-height: 2.5rem;
+  width: 100%;
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-control);
+  background: var(--admin-surface);
+  color: var(--admin-text);
+  font: inherit;
+  letter-spacing: 0;
+  padding-inline: var(--admin-space-3);
+}
+
+.design-favicon-tool__grid button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.5rem;
+  border: 1px solid var(--admin-accent-strong);
+  border-radius: var(--admin-radius-control);
+  background: var(--admin-accent-strong);
+  color: #ffffff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 900;
+  padding-inline: var(--admin-space-4);
+}
+
+.design-favicon-tool p {
+  margin: var(--admin-space-3) 0 0;
+  color: var(--admin-muted);
+  font-size: 0.88rem;
 }
 
 .design-actions output {
