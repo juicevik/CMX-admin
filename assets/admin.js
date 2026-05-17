@@ -4769,6 +4769,7 @@
     renderDesignPanel(payload);
     renderRuntime(manifest.runtime || {});
     renderRolePermissions(manifest, authContract);
+    applyRolePermissionsVisibility(authState.actor);
     renderContractList(authContract);
     setSectionCounts(manifest, contracts);
     setAdminBootStatus('Данные админки загружены: ' + ((manifest.pages || []).length) + ' страниц, ' + ((manifest.modules || []).length) + ' модулей');
