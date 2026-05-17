@@ -232,6 +232,113 @@
     });
   }
 
+  async function fetchGithubJson(path) {
+    const response = await fetch(githubApiUrl(path), {
+      method: 'GET',
+      headers: githubHeaders()
+    });
+    const payload = await readResponseJson(response);
+
+    return { response, payload };
+  }
+
+  function formatMinutes(value) {
+    const minutes = Math.max(0, Math.round(Number(value) || 0));
+
+    return minutes + ' мин';
+  }
+
+  function currentMonthStartIso() {
+    const now = new Date();
+
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0)).toISOString();
+  }
+
+  function repoActionsFallbackLabel(payload) {
+    const runs = payload && Array.isArray(payload.workflow_runs) ? payload.workflow_runs : [];
+    const totalCount = payload && Number.isFinite(Number(payload.total_count)) ? Number(payload.total_count) : runs.length;
+    const wallMinutes = runs.reduce((sum, run) => {
+      if (!run || !run.run_started_at || !run.updated_at) {
+        return sum;
+      }
+
+      const started = Date.parse(run.run_started_at);
+      const updated = Date.parse(run.updated_at);
+
+      if (!Number.isFinite(started) || !Number.isFinite(updated) || updated <= started) {
+        return sum;
+      }
+
+      return sum + ((updated - started) / 60000);
+    }, 0);
+
+    return 'Actions: ~' + formatMinutes(wallMinutes) + ' · ' + totalCount + ' запусков';
+  }
+
+  async function loadRepoActionsRuns(repository) {
+    const since = encodeURIComponent('>=' + currentMonthStartIso());
+    const workflowRuns = [];
+    let totalCount = 0;
+
+    for (let page = 1; page <= 3; page += 1) {
+      const runs = await fetchGithubJson('/repos/' + repository + '/actions/runs?per_page=100&page=' + page + '&created=' + since);
+
+      if (!runs.response.ok || !runs.payload) {
+        return null;
+      }
+
+      const pageRuns = Array.isArray(runs.payload.workflow_runs) ? runs.payload.workflow_runs : [];
+
+      totalCount = Number(runs.payload.total_count || totalCount || pageRuns.length);
+      workflowRuns.push(...pageRuns);
+
+      if (workflowRuns.length >= totalCount || pageRuns.length === 0) {
+        break;
+      }
+    }
+
+    return { total_count: totalCount || workflowRuns.length, workflow_runs: workflowRuns };
+  }
+
+  async function loadGithubActionsUsage() {
+    const config = readGithubConfig();
+    const owner = config && config.owner ? String(config.owner) : '';
+    const repository = config && config.repository ? String(config.repository) : '';
+
+    if (!owner || !repository) {
+      return 'Actions: недоступны';
+    }
+
+    try {
+      const billing = await fetchGithubJson('/users/' + encodeURIComponent(owner) + '/settings/billing/actions');
+
+      if (billing.response.ok && billing.payload) {
+        const used = Number(billing.payload.total_minutes_used || 0);
+        const included = Number(billing.payload.included_minutes || 0);
+
+        if (included > 0) {
+          return 'Actions: ' + formatMinutes(used) + '/' + formatMinutes(included);
+        }
+
+        return 'Actions: ' + formatMinutes(used);
+      }
+    } catch (error) {
+      // Billing requires account-level scope; repo workflow data below is the safe fallback.
+    }
+
+    try {
+      const runs = await loadRepoActionsRuns(repository);
+
+      if (runs) {
+        return repoActionsFallbackLabel(runs);
+      }
+    } catch (error) {
+      // Keep the widget useful even when Actions read access is not available.
+    }
+
+    return 'Actions: недоступны';
+  }
+
   function githubToken() {
     return githubState.token || sessionStorage.getItem(githubSessionKey()) || '';
   }
@@ -258,11 +365,7 @@
     }
 
     try {
-      const response = await fetch(githubApiUrl('/rate_limit'), {
-        method: 'GET',
-        headers: githubHeaders()
-      });
-      const payload = await readResponseJson(response);
+      const { response, payload } = await fetchGithubJson('/rate_limit');
 
       if (!response.ok || !payload || !payload.resources) {
         setGithubRateLimit('Лимиты GitHub API недоступны', true);
@@ -270,11 +373,11 @@
       }
 
       const core = payload.resources.core || {};
-      const actions = payload.resources.actions || {};
+      const actionsLabel = await loadGithubActionsUsage();
       const resetAt = core.reset ? new Date(Number(core.reset) * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'unknown';
       const parts = [
         'Core: ' + (core.remaining ?? '?') + '/' + (core.limit ?? '?'),
-        'Actions: ' + (actions.remaining ?? '?') + '/' + (actions.limit ?? '?'),
+        actionsLabel,
         'reset: ' + resetAt
       ];
 
@@ -4110,8 +4213,14 @@
     document.execCommand('copy');
   }
 
-  function metricHtml(label, value) {
-    return '<article class="metric"><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(value) + '</strong></article>';
+  function metricHtml(label, value, detail, modifier) {
+    return '<article class="metric' + (modifier ? ' ' + escapeHtml(modifier) : '') + '"><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(value) + '</strong>'
+      + (detail ? '<small>' + escapeHtml(detail) + '</small>' : '') + '</article>';
+  }
+
+  function githubMetricHtml(value) {
+    return '<article class="metric metric--github-rate" data-github-rate-limit data-rate-state="' + (githubState.rateLimitVisible ? 'ready' : 'pending') + '">'
+      + '<h1>GitHub лимиты</h1><h3 data-github-rate-limit-value>' + escapeHtml(value) + '</h3></article>';
   }
 
   function renderAdminMetrics(manifest) {
@@ -4125,17 +4234,23 @@
     const githubRateMessage = githubState.rateLimitVisible
       ? githubState.rateLimitMessage
       : (isGithubMode() ? 'Загрузка лимитов...' : 'GitHub не подключен');
-    const statusMessage = summary.total_pages || summary.modules
-      ? (summary.total_pages || 0) + ' стр. · ' + (summary.modules || 0) + ' мод.'
+    const totalPages = Number(summary.total_pages || 0);
+    const publishedPages = Number(summary.published_pages || 0);
+    const modules = Number(summary.modules || 0);
+    const statusMessage = totalPages || modules
+      ? 'Готово'
       : 'Ожидание';
+    const statusDetail = totalPages || modules
+      ? 'Страниц: ' + totalPages + ' · запущено: ' + publishedPages + ' · сохранено: ' + totalPages + ' · модулей: ' + modules
+      : 'Данные еще загружаются';
 
     target.innerHTML = [
-      metricHtml('Статус', statusMessage),
-      metricHtml('Pages', summary.total_pages || 0),
-      metricHtml('Published', summary.published_pages || 0),
-      metricHtml('Modules', summary.modules || 0),
+      metricHtml('Статус', statusMessage, statusDetail, 'metric--status'),
+      metricHtml('Pages', totalPages),
+      metricHtml('Published', publishedPages),
+      metricHtml('Modules', modules),
       metricHtml('Version', manifest && manifest.version ? manifest.version : 'n/a'),
-      '<article class="metric metric--github-rate" data-github-rate-limit data-rate-state="' + (githubState.rateLimitVisible ? 'ready' : 'pending') + '"><span>GitHub лимиты</span><strong data-github-rate-limit-value>' + escapeHtml(githubRateMessage) + '</strong></article>'
+      githubMetricHtml(githubRateMessage)
     ].join('');
   }
 
