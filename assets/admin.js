@@ -2432,6 +2432,191 @@
     return editorialActiveFields(contracts, contentType).find((field) => field && field.key === key) || null;
   }
 
+  function readableFieldTarget(target) {
+    const map = {
+      page_title: 'главный заголовок страницы и название в админском списке страниц',
+      page_header: 'первый экран страницы под шапкой сайта',
+      breadcrumbs: 'хлебные крошки над контентом страницы',
+      rich_text: 'основной текстовый блок страницы',
+      product_profile: 'подробный блок товара на странице продукта',
+      product_card: 'карточку товара в каталоге, карусели и связанных блоках',
+      product_review_card: 'карточку обзора товара на странице обзоров',
+      comparison_table: 'строку товара в таблицах сравнения',
+      category_body: 'контент внутри страницы категории',
+      category_guides: 'связанные гайды и подсказки внутри категории',
+      home_featured_reviews: 'товарные карточки и обзоры на главной странице',
+      home_category_cards: 'карточки категорий на главной странице',
+      related_pages: 'блок связанных страниц и внутренних ссылок',
+      author_profile: 'профиль эксперта или автора',
+      author_cards: 'карточки экспертов в списках и виджетах',
+      review_body: 'текст страницы обзора',
+      footer_navigation: 'ссылки в подвале сайта',
+      seo_meta: 'SEO title, description и данные для сниппета',
+      structured_data: 'JSON-LD микроразметку страницы'
+    };
+
+    return map[target] || ('блок сайта "' + String(target || '').replace(/_/g, ' ') + '"');
+  }
+
+  function contentTypeName(contentType) {
+    const map = {
+      product: 'товара',
+      article: 'статьи или гайда',
+      review: 'обзора',
+      author: 'автора или эксперта',
+      category: 'категории',
+      technical: 'технической страницы'
+    };
+
+    return map[contentType] || 'страницы';
+  }
+
+  function fieldHelpText(field, contentType, area) {
+    const key = String(field && field.key ? field.key : '');
+    const label = String(field && field.label ? field.label : key || 'поле');
+    const publicTargets = field && Array.isArray(field.public_targets) ? field.public_targets : [];
+    const targetText = publicTargets.map(readableFieldTarget).filter(Boolean).join('; ');
+    const byKey = {
+      title: 'При редактировании этой строки меняется основной заголовок и публичное название ' + contentTypeName(contentType) + '.',
+      brand: 'При редактировании этой строки меняется бренд или производитель, который пользователь видит рядом с названием товара.',
+      description: 'При редактировании этой строки меняется короткое описание, которое видно пользователю в карточке, первом экране или превью страницы.',
+      rating: 'При редактировании этой строки меняется числовая оценка товара. Она влияет только на отображение рейтинга, а не на реальные голоса пользователей.',
+      price_range: 'При редактировании этой строки меняется цена, которую пользователь видит рядом с кнопкой покупки.',
+      buy_button: 'При редактировании этой строки меняется текст кнопки покупки.',
+      buy_url: 'При редактировании этой строки меняется ссылка, куда попадет пользователь после клика по кнопке покупки.',
+      review_cta_label: 'При редактировании этой строки меняется текст кнопки или ссылки, ведущей на обзор товара.',
+      review_route: 'При редактировании этой строки меняется путь к странице обзора, на которую ведет карточка товара.',
+      review_title: 'При редактировании этой строки меняется заголовок связанного обзора товара.',
+      review_preview: 'При редактировании этой строки меняется короткое превью обзора, которое видно в карточке или блоке Medical Review.',
+      review_link_label: 'При редактировании этой строки меняется подпись ссылки на обзор.',
+      compare_label: 'При редактировании этой строки меняется текст ссылки или кнопки сравнения.',
+      compare_route: 'При редактировании этой строки меняется URL страницы сравнения.',
+      author_name: 'При редактировании этой строки меняется имя автора, которое выводится на странице, в карточке автора и в микроразметке.',
+      author_route: 'При редактировании этой строки меняется ссылка на страницу автора.',
+      reviewer: 'При редактировании этой строки меняется имя медицинского рецензента или эксперта в блоке проверки.',
+      reviewer_role: 'При редактировании этой строки меняется должность или специализация рецензента.',
+      reviewer_route: 'При редактировании этой строки меняется ссылка на страницу рецензента.',
+      reviewer_image: 'При редактировании этой строки меняется фотография рецензента в блоке Medical Review.',
+      reviewer_social_links: 'При редактировании этой строки меняются ссылки на профили рецензента, которые видны в его блоке.',
+      updated: 'При редактировании этой строки меняется дата обновления, которую пользователь видит на странице.',
+      primary_image: 'При редактировании этой строки меняется основная фотография страницы или товара.',
+      verdict: 'При редактировании этой строки меняется короткий редакционный вывод о товаре.',
+      availability: 'При редактировании этой строки меняется подпись доступности товара.',
+      facts: 'При редактировании этой строки меняются короткие факты в карточке или профиле товара.',
+      ingredients: 'При редактировании этой строки меняется список ингредиентов и дозировок.',
+      safety_notes: 'При редактировании этой строки меняются предупреждения и заметки безопасности.',
+      pros: 'При редактировании этой строки меняется список плюсов.',
+      cons: 'При редактировании этой строки меняется список минусов.',
+      sources: 'При редактировании этой строки меняются источники и внешние ссылки.',
+      body_sections: 'При редактировании этой строки меняется основной текст статьи или обзора.',
+      role: 'При редактировании этой строки меняется роль автора или эксперта.',
+      credentials: 'При редактировании этой строки меняется список квалификаций автора.',
+      bio: 'При редактировании этой строки меняется описание автора или эксперта.',
+      reviews_route: 'При редактировании этой строки меняется ссылка на список обзоров автора.',
+      social_links: 'При редактировании этой строки меняются социальные ссылки автора.',
+      policy_sections: 'При редактировании этой строки меняется основной текст технической страницы.',
+      faq: 'При редактировании этой строки меняются вопросы и ответы на странице.'
+    };
+    let text = byKey[key] || ('При редактировании этой строки меняется поле "' + label + '" на странице ' + contentTypeName(contentType) + '.');
+
+    if (field && field.dynamic === true) {
+      text = 'При редактировании этой строки меняется конкретный уже существующий текст или значение на выбранной странице. Система подставила это поле из текущей структуры страницы.';
+    }
+
+    if (area === 'product_card') {
+      text += ' В редакторе карточек это поле также влияет на внешний вид товара в каталоге и на главной карусели.';
+    }
+
+    if (targetText) {
+      text += ' На сайте это видно здесь: ' + targetText + '.';
+    }
+
+    if (field && field.input_type === 'url') {
+      text += ' Вводите полный публичный URL, если ссылка ведет наружу.';
+    }
+
+    if (field && field.input_type === 'list') {
+      text += ' Каждый пункт лучше писать с новой строки.';
+    }
+
+    return text;
+  }
+
+  function createHelpBubble(text) {
+    const help = document.createElement('span');
+
+    help.className = 'field-help';
+    help.tabIndex = 0;
+    help.setAttribute('role', 'button');
+    help.setAttribute('aria-label', text);
+    help.dataset.tooltip = text;
+    help.textContent = '❔';
+
+    return help;
+  }
+
+  function createFieldLabel(labelText, helpText) {
+    const wrapper = document.createElement('span');
+    const title = document.createElement('strong');
+
+    wrapper.className = 'field-label-with-help';
+    title.textContent = labelText;
+    wrapper.appendChild(title);
+    wrapper.appendChild(createHelpBubble(helpText));
+
+    return wrapper;
+  }
+
+  function enhanceStaticLabelHelp(controlId, helpText) {
+    const control = byId(controlId);
+    const label = control ? document.querySelector('label[for="' + controlId + '"]') : null;
+
+    if (!control || !label || label.querySelector('.field-help')) {
+      return;
+    }
+
+    const textNodes = [];
+
+    Array.from(label.childNodes).forEach((node) => {
+      if (node === control) {
+        return;
+      }
+
+      if (node.nodeType === Node.TEXT_NODE && String(node.textContent || '').trim() !== '') {
+        textNodes.push(node);
+      }
+    });
+
+    const title = textNodes.map((node) => String(node.textContent || '').trim()).join(' ').trim();
+
+    textNodes.forEach((node) => node.remove());
+    label.insertBefore(createFieldLabel(title || controlId, helpText), control);
+  }
+
+  function enhanceStaticAdminHelp() {
+    const helps = {
+      'admin-editorial-mode': 'Выбирает действие: создать новую страницу или отредактировать уже опубликованную.',
+      'admin-editorial-existing-page': 'Выбирает готовую страницу сайта. После выбора матрица показывает поля именно этой страницы.',
+      'admin-editorial-content-type': 'Выбирает тип шаблона: товар, статья, обзор, автор, категория или техническая страница.',
+      'admin-editorial-title': 'Меняет главный заголовок страницы и название, которое будет видно в списках и ссылках.',
+      'admin-editorial-slug': 'Меняет URL-часть страницы после домена. Например, значение omega даст путь вида /bady/omega/.',
+      'admin-editorial-media-file': 'Загружает новую картинку для выбранной страницы или карточки.',
+      'admin-editorial-media-path': 'Указывает путь к картинке, которая будет показана на сайте.',
+      'admin-editorial-media-alt': 'Меняет alt-текст картинки для SEO и доступности.',
+      'admin-product-card-mode': 'Выбирает действие для товара: создать новую карточку или отредактировать существующую.',
+      'admin-product-card-existing-page': 'Выбирает готовый товар. После выбора поля карточки заполняются текущими данными.',
+      'admin-product-card-title': 'Меняет название товара в карточке, каталоге, карусели и на странице товара.',
+      'admin-product-card-slug': 'Меняет URL-часть товара внутри каталога.',
+      'admin-product-card-media-file': 'Загружает фото товара для карточки и страницы продукта.',
+      'admin-product-card-media-path': 'Указывает путь к изображению товара, если картинка уже лежит на сайте.',
+      'admin-product-card-media-alt': 'Меняет alt-текст фотографии товара.',
+      'admin-site-header-nav': 'Редактирует верхнее меню сайта: группы ссылок, подписи пунктов и пути, по которым кликает пользователь.',
+      'admin-site-footer-nav': 'Редактирует подвал сайта: колонки, подписи ссылок и пути внизу каждой страницы.'
+    };
+
+    Object.keys(helps).forEach((id) => enhanceStaticLabelHelp(id, helps[id]));
+  }
+
   function renderEditorialMatrix(contracts) {
     const config = editorialConfig(contracts);
     const matrix = document.querySelector('[data-editorial-field-matrix]');
@@ -2462,7 +2647,6 @@
       const row = document.createElement('label');
       const input = document.createElement('input');
       const body = document.createElement('span');
-      const title = document.createElement('strong');
       const hint = document.createElement('small');
       const checked = current.includes(key);
 
@@ -2471,10 +2655,9 @@
       input.value = key;
       input.checked = checked;
       input.dataset.editorialFieldToggle = key;
-      title.textContent = field.label || key;
       hint.className = 'editorial-ai-hint';
       hint.textContent = field.ai_hint || '';
-      body.appendChild(title);
+      body.appendChild(createFieldLabel(field.label || key, fieldHelpText(field, contentType, 'editorial_matrix')));
       body.appendChild(hint);
       row.appendChild(input);
       row.appendChild(body);
@@ -2517,7 +2700,6 @@
         : document.createElement('input');
 
       label.setAttribute('for', 'admin-editorial-field-' + key);
-      label.textContent = field.label || key;
       control.id = 'admin-editorial-field-' + key;
       control.dataset.editorialInput = key;
 
@@ -2536,6 +2718,7 @@
         control.value = editorialListText(editorialState.editFieldValues[key]);
       }
 
+      label.appendChild(createFieldLabel(field.label || key, fieldHelpText(field, contentType, 'editorial_input')));
       label.appendChild(control);
       container.appendChild(label);
     });
@@ -2563,6 +2746,161 @@
       label.appendChild(text);
       container.appendChild(label);
     });
+  }
+
+  function navigationLines(groups) {
+    return (Array.isArray(groups) ? groups : []).map((group) => {
+      const groupId = group && group.id ? String(group.id) : 'group';
+      const groupTitle = group && group.title ? String(group.title) : 'Navigation';
+      const items = group && Array.isArray(group.items) ? group.items : [];
+      const lines = ['# group: ' + groupId + ' | ' + groupTitle];
+
+      items.forEach((item) => {
+        if (!item || !item.title || !item.route) {
+          return;
+        }
+
+        lines.push(String(item.title) + ' | ' + String(item.route));
+      });
+
+      return lines.join('\n');
+    }).join('\n\n');
+  }
+
+  function safeNavigationGroupId(value, fallback) {
+    const normalized = String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+
+    return normalized || fallback;
+  }
+
+  function parseNavigationLines(text, fallbackId) {
+    const groups = [];
+    let group = null;
+
+    String(text || '').split(/\r?\n/).forEach((rawLine) => {
+      const line = rawLine.trim();
+
+      if (!line) {
+        return;
+      }
+
+      if (line.indexOf('#') === 0) {
+        const match = line.match(/^#\s*group:\s*([^|]+)\|\s*(.+)$/i);
+
+        if (!match) {
+          return;
+        }
+
+        group = {
+          id: safeNavigationGroupId(match[1], fallbackId + '-' + String(groups.length + 1)),
+          title: match[2].trim(),
+          items: []
+        };
+        groups.push(group);
+        return;
+      }
+
+      if (!group) {
+        group = {
+          id: fallbackId + '-1',
+          title: fallbackId === 'header' ? 'Header navigation' : 'Footer navigation',
+          items: []
+        };
+        groups.push(group);
+      }
+
+      const separator = line.indexOf('|');
+      const title = separator >= 0 ? line.slice(0, separator).trim() : line;
+      const route = separator >= 0 ? line.slice(separator + 1).trim() : '';
+
+      if (title && route) {
+        group.items.push({ title, route });
+      }
+    });
+
+    return groups;
+  }
+
+  function setSiteNavigationStatus(message) {
+    const status = document.querySelector('[data-site-navigation-status]');
+
+    if (status) {
+      status.value = message;
+    }
+  }
+
+  function setSiteNavigationOutput(payload) {
+    const output = document.querySelector('[data-site-navigation-output]');
+
+    if (output) {
+      output.value = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
+    }
+  }
+
+  function siteNavigationPayload() {
+    const header = document.querySelector('[data-site-navigation-section="header"]');
+    const footer = document.querySelector('[data-site-navigation-section="footer"]');
+
+    return {
+      request_id: requestId('req-site-navigation'),
+      navigation: {
+        header: parseNavigationLines(header ? header.value : '', 'header'),
+        footer: parseNavigationLines(footer ? footer.value : '', 'footer')
+      }
+    };
+  }
+
+  async function submitSiteNavigation(dryRun) {
+    const payload = siteNavigationPayload();
+
+    setSiteNavigationOutput(payload);
+    setSiteNavigationStatus(dryRun ? 'Проверяю шапку и подвал...' : 'Сохраняю шапку и подвал через GitHub Actions...');
+
+    if (!isGithubMode()) {
+      const result = { ok: false, issues: ['Редактирование шапки и подвала доступно через CMS-admin_v2 на GitHub Pages.'] };
+
+      setSiteNavigationOutput(result);
+      setSiteNavigationStatus('GitHub-режим не активен.');
+      return result;
+    }
+
+    const result = await githubDispatchCommand('site_navigation', payload, dryRun);
+
+    setSiteNavigationOutput(result);
+    setSiteNavigationStatus(result.ok ? (dryRun ? 'Проверка меню отправлена.' : 'Сохранение меню отправлено в Actions.') : 'Меню не отправлено.');
+
+    return result;
+  }
+
+  function renderSiteChromeEditor(manifest) {
+    const navigation = manifest && manifest.navigation ? manifest.navigation : {};
+    const header = document.querySelector('[data-site-navigation-section="header"]');
+    const footer = document.querySelector('[data-site-navigation-section="footer"]');
+
+    if (header && header.value.trim() === '') {
+      header.value = navigationLines(navigation.header || []);
+    }
+
+    if (footer && footer.value.trim() === '') {
+      footer.value = navigationLines(navigation.footer || []);
+    }
+  }
+
+  function wireSiteChromeEditor() {
+    const validate = document.querySelector('[data-site-navigation-validate]');
+    const apply = document.querySelector('[data-site-navigation-apply]');
+
+    if (validate) {
+      validate.addEventListener('click', () => {
+        submitSiteNavigation(true);
+      });
+    }
+
+    if (apply) {
+      apply.addEventListener('click', () => {
+        submitSiteNavigation(false);
+      });
+    }
   }
 
   function currentEditorialPayload(contracts) {
@@ -3323,7 +3661,6 @@
       const row = document.createElement('label');
       const input = document.createElement('input');
       const body = document.createElement('span');
-      const title = document.createElement('strong');
       const placement = document.createElement('small');
       const hint = document.createElement('small');
       const checked = key === 'title' || current.includes(key);
@@ -3336,12 +3673,11 @@
       if (key === 'title') {
         input.disabled = true;
       }
-      title.textContent = field.label || key;
       placement.className = 'product-card-placement';
       placement.textContent = productCardPlacementLabel(key);
       hint.className = 'editorial-ai-hint';
       hint.textContent = field.ai_hint || '';
-      body.appendChild(title);
+      body.appendChild(createFieldLabel(field.label || key, fieldHelpText(field, 'product', 'product_card')));
       body.appendChild(placement);
       body.appendChild(hint);
       row.appendChild(input);
@@ -3396,7 +3732,6 @@
         : document.createElement('input');
 
       label.setAttribute('for', 'admin-product-card-field-' + key);
-      label.textContent = field.label || key;
       control.id = 'admin-product-card-field-' + key;
       control.dataset.productCardInput = key;
 
@@ -3415,6 +3750,7 @@
         control.value = editorialListText(productCardState.editFieldValues[key]);
       }
 
+      label.appendChild(createFieldLabel(field.label || key, fieldHelpText(field, 'product', 'product_card')));
       label.appendChild(control);
       container.appendChild(label);
     });
@@ -5392,17 +5728,20 @@
     renderWorkflowPages(contracts);
     renderModules(manifest.modules || []);
     renderDesignPanel(payload);
+    renderSiteChromeEditor(manifest);
     renderRuntime(manifest.runtime || {});
     renderRolePermissions(manifest, authContract);
     applyRolePermissionsVisibility(authState.actor);
     renderContractList(authContract);
     setSectionCounts(manifest, contracts);
     setAdminBootStatus('Готово');
+    enhanceStaticAdminHelp();
     wirePageFilters();
     wireMedGenPanel();
     bootComposer();
     wireEditorialWidget(adminState.actionContracts, adminState.authContract);
     wireProductCardEditor(adminState.actionContracts, adminState.authContract);
+    wireSiteChromeEditor();
     if (!isGithubMode()) {
       loadAuditHistory(authContract);
       loadDraftStatuses(authContract);

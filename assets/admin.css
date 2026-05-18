@@ -2689,6 +2689,7 @@ code {
 .editorial-mode-grid,
 .editorial-fields,
 .editorial-media,
+.site-chrome-editor,
 .editorial-delete,
 .editorial-actions {
   display: grid;
@@ -2760,6 +2761,60 @@ code {
   min-width: 0;
 }
 
+.field-label-with-help {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.field-help {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 1.45rem;
+  height: 1.45rem;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--admin-accent) 28%, var(--admin-border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--admin-accent) 10%, var(--admin-surface));
+  color: var(--admin-accent-strong);
+  cursor: help;
+  font-size: 0.82rem;
+  line-height: 1;
+  box-shadow: 0 0.35rem 1rem color-mix(in srgb, var(--admin-accent) 10%, transparent);
+}
+
+.field-help::after {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.55rem);
+  z-index: 40;
+  width: min(21rem, 78vw);
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-control);
+  background: var(--admin-text);
+  color: var(--admin-surface);
+  box-shadow: var(--admin-shadow-panel);
+  content: attr(data-tooltip);
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.35;
+  opacity: 0;
+  pointer-events: none;
+  text-align: left;
+  transform: translate(-50%, 0.25rem);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+  white-space: normal;
+}
+
+.field-help:hover::after,
+.field-help:focus-visible::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
 .editorial-ai-hint {
   margin: 0;
   color: var(--admin-muted);
@@ -2799,6 +2854,7 @@ code {
 .editorial-mode-grid label,
 .editorial-fields label,
 .editorial-media label,
+.site-chrome-editor label,
 .editorial-delete label,
 .editorial-output {
   display: grid;
@@ -2815,6 +2871,7 @@ code {
 .editorial-fields input,
 .editorial-fields textarea,
 .editorial-media input,
+.site-chrome-editor textarea,
 .editorial-delete select,
 .editorial-output textarea {
   width: 100%;
@@ -2837,10 +2894,29 @@ code {
 }
 
 .editorial-fields textarea,
+.site-chrome-editor textarea,
 .editorial-output textarea {
   min-height: 8rem;
   padding: var(--admin-space-3);
   resize: vertical;
+}
+
+.site-chrome-editor {
+  grid-template-columns: repeat(2, minmax(16rem, 1fr));
+  align-items: start;
+}
+
+.site-chrome-editor > p,
+.site-chrome-editor .editorial-actions,
+.site-chrome-editor output,
+.site-chrome-editor .editorial-output {
+  grid-column: 1 / -1;
+}
+
+.site-chrome-editor textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.84rem;
+  line-height: 1.5;
 }
 
 .editorial-output textarea {
@@ -3046,6 +3122,7 @@ code {
   .editorial-mode-grid,
   .editorial-fields,
   .editorial-media,
+  .site-chrome-editor,
   .editorial-delete,
   .editorial-actions,
   .editorial-matrix,
