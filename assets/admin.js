@@ -251,95 +251,92 @@
     return minutes + 'м';
   }
 
-  function currentMonthStartIso() {
-    const now = new Date();
+  function actionsBillingLabel(payload) {
+    const used = Number(payload && payload.total_minutes_used ? payload.total_minutes_used : 0);
+    const included = Number(payload && payload.included_minutes ? payload.included_minutes : 0);
 
-    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0)).toISOString();
-  }
-
-  function repoActionsFallbackLabel(payload) {
-    const runs = payload && Array.isArray(payload.workflow_runs) ? payload.workflow_runs : [];
-    const totalCount = payload && Number.isFinite(Number(payload.total_count)) ? Number(payload.total_count) : runs.length;
-    const wallMinutes = runs.reduce((sum, run) => {
-      if (!run || !run.run_started_at || !run.updated_at) {
-        return sum;
-      }
-
-      const started = Date.parse(run.run_started_at);
-      const updated = Date.parse(run.updated_at);
-
-      if (!Number.isFinite(started) || !Number.isFinite(updated) || updated <= started) {
-        return sum;
-      }
-
-      return sum + ((updated - started) / 60000);
-    }, 0);
-
-    return 'Act ~' + formatMinutes(wallMinutes) + ' / ' + totalCount + ' run';
-  }
-
-  async function loadRepoActionsRuns(repository) {
-    const since = encodeURIComponent('>=' + currentMonthStartIso());
-    const workflowRuns = [];
-    let totalCount = 0;
-
-    for (let page = 1; page <= 3; page += 1) {
-      const runs = await fetchGithubJson('/repos/' + repository + '/actions/runs?per_page=100&page=' + page + '&created=' + since);
-
-      if (!runs.response.ok || !runs.payload) {
-        return null;
-      }
-
-      const pageRuns = Array.isArray(runs.payload.workflow_runs) ? runs.payload.workflow_runs : [];
-
-      totalCount = Number(runs.payload.total_count || totalCount || pageRuns.length);
-      workflowRuns.push(...pageRuns);
-
-      if (workflowRuns.length >= totalCount || pageRuns.length === 0) {
-        break;
-      }
+    if (included > 0) {
+      return 'Act ' + formatMinutes(used) + '/' + formatMinutes(included);
     }
 
-    return { total_count: totalCount || workflowRuns.length, workflow_runs: workflowRuns };
+    return 'Act ' + formatMinutes(used);
+  }
+
+  function actionsBillingIssue(response, payload) {
+    const message = String(payload && payload.message ? payload.message : '').toLowerCase();
+
+    if (response && (response.status === 401 || response.status === 403 || response.status === 404) && message.includes('user') && message.includes('scope')) {
+      return 'Act нужен user';
+    }
+
+    if (response && response.status === 404) {
+      return 'Act n/a';
+    }
+
+    return '';
+  }
+
+  async function fetchActionsBillingForUser(login) {
+    if (!login) {
+      return { ok: false, label: 'Act n/a' };
+    }
+
+    try {
+      const billing = await fetchGithubJson('/users/' + encodeURIComponent(login) + '/settings/billing/actions');
+
+      if (billing.response.ok && billing.payload) {
+        return { ok: true, label: actionsBillingLabel(billing.payload) };
+      }
+
+      return { ok: false, label: actionsBillingIssue(billing.response, billing.payload) || 'Act n/a' };
+    } catch (error) {
+      return { ok: false, label: 'Act n/a' };
+    }
+  }
+
+  async function fetchActionsBillingForOrg(owner) {
+    if (!owner) {
+      return { ok: false, label: 'Act n/a' };
+    }
+
+    try {
+      const billing = await fetchGithubJson('/orgs/' + encodeURIComponent(owner) + '/settings/billing/actions');
+
+      if (billing.response.ok && billing.payload) {
+        return { ok: true, label: actionsBillingLabel(billing.payload) };
+      }
+
+      return { ok: false, label: actionsBillingIssue(billing.response, billing.payload) || 'Act n/a' };
+    } catch (error) {
+      return { ok: false, label: 'Act n/a' };
+    }
   }
 
   async function loadGithubActionsUsage() {
     const config = readGithubConfig();
     const owner = config && config.owner ? String(config.owner) : '';
-    const repository = config && config.repository ? String(config.repository) : '';
+    const actor = githubState.actorLogin ? String(githubState.actorLogin) : '';
+    const ownerBilling = await fetchActionsBillingForUser(owner);
 
-    if (!owner || !repository) {
-      return 'Act n/a';
+    if (ownerBilling.ok || ownerBilling.label === 'Act нужен user') {
+      return ownerBilling.label;
     }
 
-    try {
-      const billing = await fetchGithubJson('/users/' + encodeURIComponent(owner) + '/settings/billing/actions');
+    if (actor && actor.toLowerCase() !== owner.toLowerCase()) {
+      const actorBilling = await fetchActionsBillingForUser(actor);
 
-      if (billing.response.ok && billing.payload) {
-        const used = Number(billing.payload.total_minutes_used || 0);
-        const included = Number(billing.payload.included_minutes || 0);
-
-        if (included > 0) {
-          return 'Act ' + formatMinutes(used) + '/' + formatMinutes(included);
-        }
-
-        return 'Act ' + formatMinutes(used);
+      if (actorBilling.ok || actorBilling.label === 'Act нужен user') {
+        return actorBilling.label;
       }
-    } catch (error) {
-      // Billing requires account-level scope; repo workflow data below is the safe fallback.
     }
 
-    try {
-      const runs = await loadRepoActionsRuns(repository);
+    const orgBilling = await fetchActionsBillingForOrg(owner);
 
-      if (runs) {
-        return repoActionsFallbackLabel(runs);
-      }
-    } catch (error) {
-      // Keep the widget useful even when Actions read access is not available.
+    if (orgBilling.ok || orgBilling.label === 'Act нужен user') {
+      return orgBilling.label;
     }
 
-    return 'Act n/a';
+    return 'Act billing n/a';
   }
 
   function githubToken() {
