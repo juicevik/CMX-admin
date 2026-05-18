@@ -250,6 +250,14 @@ code {
   color: var(--admin-text);
 }
 
+.admin-nav a[href="#admin-site-workflow"]::before {
+  content: "◎";
+}
+
+.admin-nav a[href="#admin-sites"]::before {
+  content: "▣";
+}
+
 .admin-nav a[href="#admin-editorial"]::before {
   content: "✎";
 }
@@ -260,6 +268,10 @@ code {
 
 .admin-nav a[href="#admin-site-launch"]::before {
   content: "+";
+}
+
+.admin-nav a[href="#admin-medgen"]::before {
+  content: "⌁";
 }
 
 .admin-nav a[href="#admin-design"]::before {
@@ -2534,6 +2546,167 @@ code {
   font-size: 0.88rem;
 }
 
+.site-workflow-panel,
+.site-fleet-panel {
+  display: grid;
+  gap: var(--admin-space-4);
+}
+
+.site-workflow__active,
+.site-fleet-toolbar {
+  display: grid;
+  grid-template-columns: minmax(14rem, 24rem) minmax(0, 1fr);
+  gap: var(--admin-space-3);
+  align-items: end;
+}
+
+.site-workflow__active label,
+.site-fleet-toolbar label {
+  display: grid;
+  gap: var(--admin-space-2);
+  color: var(--admin-text);
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.site-workflow__active select,
+.site-fleet-toolbar select {
+  min-height: 2.55rem;
+  padding-inline: var(--admin-space-3);
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-control);
+  background: var(--admin-surface);
+  color: var(--admin-text);
+  font: inherit;
+}
+
+.site-workflow__active output,
+.site-fleet-toolbar output {
+  min-height: 2.55rem;
+  align-content: center;
+  padding: 0 var(--admin-space-3);
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-control);
+  background: var(--admin-surface-muted);
+  color: var(--admin-muted);
+  font-size: 0.86rem;
+  font-weight: 850;
+}
+
+.site-workflow__profile,
+.site-fleet-cards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--admin-space-3);
+}
+
+.site-workflow__profile article,
+.site-fleet-card {
+  display: grid;
+  gap: var(--admin-space-2);
+  min-width: 0;
+  padding: var(--admin-space-4);
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-card);
+  background: var(--admin-surface);
+  box-shadow: var(--admin-shadow-soft);
+}
+
+.site-workflow__profile span,
+.site-fleet-card span {
+  color: var(--admin-muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.site-workflow__profile strong,
+.site-fleet-card h3 {
+  margin: 0;
+  color: var(--admin-text);
+  font-size: clamp(1rem, 2vw, 1.35rem);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.site-workflow__steps {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--admin-space-3);
+}
+
+.site-workflow__steps a {
+  display: grid;
+  gap: var(--admin-space-2);
+  min-height: 8.5rem;
+  padding: var(--admin-space-4);
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-card);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--admin-accent) 8%, transparent), transparent 48%),
+    var(--admin-surface);
+  color: var(--admin-text);
+  text-decoration: none;
+}
+
+.site-workflow__steps a:hover {
+  border-color: color-mix(in srgb, var(--admin-accent) 52%, var(--admin-border));
+  box-shadow: 0 14px 30px rgba(0, 139, 149, 0.12);
+}
+
+.site-workflow__steps strong {
+  font-size: 0.94rem;
+  line-height: 1.25;
+}
+
+.site-workflow__steps span,
+.site-workflow__note,
+.site-fleet-panel p,
+.site-fleet-card dd {
+  color: var(--admin-muted);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.site-workflow__note {
+  margin: 0;
+}
+
+.site-fleet-card[data-active="true"] {
+  border-color: color-mix(in srgb, var(--admin-accent) 58%, var(--admin-border));
+}
+
+.site-fleet-card dl {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.45rem var(--admin-space-3);
+  margin: 0;
+}
+
+.site-fleet-card dt {
+  color: var(--admin-muted);
+  font-size: 0.74rem;
+  font-weight: 900;
+}
+
+.site-fleet-card dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.site-fleet-secrets {
+  max-height: 14rem;
+  overflow: auto;
+  margin: var(--admin-space-3) 0 0;
+  padding: var(--admin-space-3);
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-control);
+  background: var(--admin-surface);
+  color: var(--admin-text);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
 .design-actions output {
   grid-column: 1 / -1;
   color: var(--admin-muted);
@@ -3101,6 +3274,15 @@ code {
   .admin-metrics {
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
   }
+
+  .site-workflow__steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .site-workflow__profile,
+  .site-fleet-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 820px) {
@@ -3143,7 +3325,12 @@ code {
   .design-actions,
   .design-editor,
   .domain-design__grid,
-  .domain-design__actions {
+  .domain-design__actions,
+  .site-workflow__active,
+  .site-fleet-toolbar,
+  .site-workflow__profile,
+  .site-workflow__steps,
+  .site-fleet-cards {
     grid-template-columns: 1fr;
   }
 

@@ -8,7 +8,8 @@
     actionContracts: null,
     authContract: null,
     manifest: null,
-    adminUsers: []
+    adminUsers: [],
+    activeSiteId: ''
   };
   const draftActionState = {
     dryRun: null
@@ -506,6 +507,193 @@
       .replaceAll('>', '&gt;')
       .replaceAll('"', '&quot;')
       .replaceAll("'", '&#039;');
+  }
+
+  function siteProfiles(manifest) {
+    const source = manifest || adminState.manifest || {};
+
+    return Array.isArray(source.sites) ? source.sites : [];
+  }
+
+  function siteProfileById(siteId) {
+    const profiles = siteProfiles();
+    const normalized = String(siteId || '').trim();
+
+    return profiles.find((profile) => String(profile.site_id || '') === normalized) || profiles[0] || null;
+  }
+
+  function activeSiteProfile() {
+    return siteProfileById(adminState.activeSiteId);
+  }
+
+  function siteRouteNamespace(profile, type) {
+    const routes = profile && profile.route_namespaces && typeof profile.route_namespaces === 'object'
+      ? profile.route_namespaces
+      : {};
+
+    return String(routes[type] || '');
+  }
+
+  function profileDeployLabel(profile) {
+    const deploy = profile && profile.deploy_profile && typeof profile.deploy_profile === 'object'
+      ? profile.deploy_profile
+      : {};
+    const provider = String(deploy.provider || 'static_vps');
+    const environment = String(deploy.environment || 'production');
+
+    return provider + ' / ' + environment;
+  }
+
+  function syncSiteScopedDefaults(profile) {
+    if (!profile) {
+      return;
+    }
+
+    const domain = String(profile.domain || '').trim();
+    const baseUrl = String(profile.base_url || (domain ? 'https://' + domain : '')).trim();
+    const locale = String(profile.root_locale || '').trim();
+    const title = String(profile.display_name || domain || '').trim();
+
+    [
+      ['admin-medgen-site-domain', domain],
+      ['admin-medgen-site-name', title],
+      ['admin-medgen-locale', locale],
+      ['admin-domain-name', domain],
+      ['admin-domain-base-url', baseUrl],
+      ['admin-domain-default-locale', locale],
+      ['admin-domain-supplement-prefix', siteRouteNamespace(profile, 'supplement')],
+      ['admin-domain-author-prefix', siteRouteNamespace(profile, 'author')],
+      ['admin-domain-article-prefix', siteRouteNamespace(profile, 'article')]
+    ].forEach(([id, value]) => {
+      const field = byId(id);
+
+      if (field && value && (!field.value || field.dataset.siteScopedAutofill === 'true')) {
+        field.value = value;
+        field.dataset.siteScopedAutofill = 'true';
+      }
+    });
+  }
+
+  function allSecretRefs(profile) {
+    const refs = {};
+    const collect = (prefix, block) => {
+      const secretRefs = block && block.secret_refs && typeof block.secret_refs === 'object' ? block.secret_refs : {};
+
+      Object.entries(secretRefs).forEach(([key, value]) => {
+        refs[prefix + '.' + key] = value;
+      });
+    };
+
+    collect('deploy', profile && profile.deploy_profile);
+    collect('medgen', profile && profile.medgen_profile);
+
+    return refs;
+  }
+
+  function setActiveSite(siteId) {
+    const profile = siteProfileById(siteId);
+
+    adminState.activeSiteId = profile ? String(profile.site_id || '') : '';
+    syncSiteScopedDefaults(profile);
+    renderSiteWorkflow(adminState.manifest || {});
+    renderSiteFleet(adminState.manifest || {});
+  }
+
+  function siteProfileOptions(manifest) {
+    const profiles = siteProfiles(manifest);
+
+    return profiles.map((profile) => ({
+      value: String(profile.site_id || ''),
+      label: String(profile.display_name || profile.domain || profile.site_id || 'Site')
+    }));
+  }
+
+  function renderSiteWorkflow(manifest) {
+    const profiles = siteProfiles(manifest);
+    const select = document.querySelector('[data-active-site-select]');
+    const status = document.querySelector('[data-active-site-status]');
+    const profile = activeSiteProfile() || profiles[0] || null;
+
+    if (!adminState.activeSiteId && profile) {
+      adminState.activeSiteId = String(profile.site_id || '');
+    }
+
+    if (select) {
+      fillSelect(select, siteProfileOptions(manifest));
+      select.value = adminState.activeSiteId;
+
+      if (select.dataset.activeSiteBound !== 'true') {
+        select.dataset.activeSiteBound = 'true';
+        select.addEventListener('change', () => setActiveSite(select.value));
+      }
+    }
+
+    const fieldValue = {
+      domain: profile ? String(profile.domain || '-') : '-',
+      locale: profile ? String(profile.root_locale || '-') + (profile.geo_country ? ' / ' + String(profile.geo_country) : '') : '-',
+      deploy: profile ? profileDeployLabel(profile) : '-',
+      content: profile ? String(profile.content_mode || 'manual') : '-'
+    };
+
+    Object.entries(fieldValue).forEach(([key, value]) => {
+      document.querySelectorAll('[data-site-workflow-field="' + key + '"]').forEach((node) => {
+        node.textContent = value;
+      });
+    });
+
+    if (status) {
+      status.value = profile
+        ? 'Активный сайт: ' + String(profile.domain || profile.site_id || 'site')
+        : 'Нет профилей сайтов. Создайте профиль перед генерацией и редактурой.';
+      status.textContent = status.value;
+    }
+
+    syncSiteScopedDefaults(profile);
+  }
+
+  function renderSiteFleet(manifest) {
+    const profiles = siteProfiles(manifest);
+    const select = document.querySelector('[data-site-fleet-select]');
+    const status = document.querySelector('[data-site-fleet-status]');
+    const cards = document.querySelector('[data-site-fleet-cards]');
+    const secrets = document.querySelector('[data-site-fleet-secret-refs]');
+    const profile = activeSiteProfile() || profiles[0] || null;
+
+    if (select) {
+      fillSelect(select, siteProfileOptions(manifest));
+      select.value = profile ? String(profile.site_id || '') : '';
+
+      if (select.dataset.siteFleetBound !== 'true') {
+        select.dataset.siteFleetBound = 'true';
+        select.addEventListener('change', () => setActiveSite(select.value));
+      }
+    }
+
+    if (status) {
+      const count = profiles.length;
+      status.value = count ? 'Загружено профилей: ' + count : 'Профили сайтов не найдены.';
+      status.textContent = status.value;
+    }
+
+    if (cards) {
+      cards.innerHTML = profiles.map((item) => {
+        const isActive = profile && String(profile.site_id || '') === String(item.site_id || '');
+        return '<article class="site-fleet-card" data-site-fleet-card="' + escapeHtml(item.site_id || '') + '" data-active="' + (isActive ? 'true' : 'false') + '">'
+          + '<span>' + escapeHtml(item.status || 'draft') + '</span>'
+          + '<h3>' + escapeHtml(item.display_name || item.domain || item.site_id || 'Site') + '</h3>'
+          + '<dl>'
+          + '<dt>Domain</dt><dd>' + escapeHtml(item.domain || '-') + '</dd>'
+          + '<dt>Locale</dt><dd>' + escapeHtml(item.root_locale || '-') + '</dd>'
+          + '<dt>Deploy</dt><dd>' + escapeHtml(profileDeployLabel(item)) + '</dd>'
+          + '<dt>SEO</dt><dd>' + escapeHtml((item.seo && item.seo.hreflang_policy) || 'single_locale_only') + '</dd>'
+          + '</dl>'
+          + '</article>';
+      }).join('');
+    }
+
+    if (secrets) {
+      secrets.textContent = JSON.stringify(allSecretRefs(profile), null, 2);
+    }
   }
 
   function setAdminBootStatus(message) {
@@ -5639,7 +5827,8 @@
     const productCards = contracts && Array.isArray(contracts.pages)
       ? contracts.pages.filter((page) => editorialContentTypeForPage(page) === 'product').length
       : 0;
-    const values = { 'main-workspace': editorialTypes + productCards, editorial: editorialTypes, 'product-cards': productCards, 'role-permissions': 6, 'site-launch': 6, medgen: 4, sites: 1, content: pages, workflow: actions + createTemplates, modules, design: 2, system, technical: pages + modules + actions };
+    const sites = manifest && Array.isArray(manifest.sites) ? manifest.sites.length : 0;
+    const values = { 'site-workflow': 5, 'main-workspace': editorialTypes + productCards, editorial: editorialTypes, 'product-cards': productCards, 'role-permissions': 6, 'site-launch': 6, medgen: 4, sites, content: pages, workflow: actions + createTemplates, modules, design: 2, system, technical: pages + modules + actions };
 
     Object.entries(values).forEach(([section, count]) => {
       const node = document.querySelector('[data-section-count="' + section + '"]');
@@ -5672,12 +5861,15 @@
     adminState.actionContracts = null;
     adminState.authContract = null;
     adminState.manifest = null;
+    adminState.activeSiteId = '';
     designState.booted = false;
     resetEditorialWidgetState();
     setGatedVisible(false);
     setRolePermissionsShortcutVisible(false);
     setAdminBootStatus(message || 'Данные админки не загружены');
     renderDesignPanel(null);
+    renderSiteWorkflow({});
+    renderSiteFleet({});
     setDomainOutput('');
     renderRolePermissions({}, readAuthContract());
     renderAdminMetrics({ summary: {} });
@@ -5717,6 +5909,9 @@
     adminState.manifest = manifest;
     adminState.actionContracts = contracts;
     adminState.authContract = authContract;
+    if (!adminState.activeSiteId && Array.isArray(manifest.sites) && manifest.sites[0]) {
+      adminState.activeSiteId = String(manifest.sites[0].site_id || '');
+    }
     setGatedVisible(true);
     renderAdminMetrics(manifest);
     if (isGithubMode() && githubToken()) {
@@ -5728,6 +5923,8 @@
     renderWorkflowPages(contracts);
     renderModules(manifest.modules || []);
     renderDesignPanel(payload);
+    renderSiteWorkflow(manifest);
+    renderSiteFleet(manifest);
     renderSiteChromeEditor(manifest);
     renderRuntime(manifest.runtime || {});
     renderRolePermissions(manifest, authContract);
