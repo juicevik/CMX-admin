@@ -136,6 +136,7 @@
 
     if (toggle) {
       toggle.setAttribute('aria-pressed', isDark ? 'true' : 'false');
+      toggle.setAttribute('aria-label', isDark ? 'Переключить светлую тему' : 'Переключить темную тему');
       toggle.setAttribute('title', automatic ? 'Тема по системе' : 'Тема задана вручную');
     }
 
@@ -1724,6 +1725,13 @@
 
     if (panel && panel.tagName.toLowerCase() === 'details') {
       panel.open = true;
+
+      let parent = panel.parentElement ? panel.parentElement.closest('details') : null;
+
+      while (parent) {
+        parent.open = true;
+        parent = parent.parentElement ? parent.parentElement.closest('details') : null;
+      }
     }
 
     return panel;
@@ -1736,6 +1744,58 @@
     if (target && typeof target.scrollIntoView === 'function') {
       target.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
+  }
+
+  function closeAllAdminSpoilers() {
+    document.querySelectorAll('main details[open]').forEach((panel) => {
+      panel.open = false;
+    });
+  }
+
+  function wireAdminBrandCollapse() {
+    document.querySelectorAll('[data-admin-collapse-spoilers]').forEach((brand) => {
+      if (brand.dataset.adminCollapseSpoilersBound === 'true') {
+        return;
+      }
+
+      brand.dataset.adminCollapseSpoilersBound = 'true';
+      brand.addEventListener('click', (event) => {
+        event.preventDefault();
+        closeAllAdminSpoilers();
+        setAccountPanelOpen(false);
+
+        const main = byId('admin-main');
+        if (main && typeof main.focus === 'function') {
+          try {
+            main.focus({ preventScroll: true });
+          } catch (error) {
+            main.focus();
+          }
+        }
+      });
+    });
+  }
+
+  function wireAdminNavAnchors() {
+    document.querySelectorAll('.admin-nav__item[href^="#admin-"]').forEach((anchor) => {
+      if (anchor.dataset.adminNavBound === 'true') {
+        return;
+      }
+
+      anchor.dataset.adminNavBound = 'true';
+      anchor.addEventListener('click', (event) => {
+        const hash = anchor.getAttribute('href') || '';
+        const fallbackId = hash.slice(1);
+        const section = fallbackId.replace(/^admin-/, '');
+
+        event.preventDefault();
+        scrollToAdminSection(section, fallbackId);
+
+        if (window.history && fallbackId) {
+          window.history.replaceState(null, '', '#' + fallbackId);
+        }
+      });
+    });
   }
 
   function loadPageFromUrl(contracts) {
@@ -2179,6 +2239,25 @@
       payload.author = author;
     }
 
+    const extra = {};
+    document.querySelectorAll('[data-medgen-extra-field]').forEach((field) => {
+      const key = field.getAttribute('data-medgen-extra-field') || '';
+
+      if (!key) {
+        return;
+      }
+
+      if ((field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement || field instanceof HTMLSelectElement) && field.value.trim() !== '') {
+        extra[key] = field.value.trim();
+      }
+    });
+    if (Object.keys(extra).length > 0) {
+      payload.extra = Object.assign(
+        payload.extra && typeof payload.extra === 'object' && !Array.isArray(payload.extra) ? payload.extra : {},
+        extra
+      );
+    }
+
     return {
       payload,
       publish: true
@@ -2212,7 +2291,7 @@
         medgen_payload_json: JSON.stringify(payload),
         dry_run: dryRun ? 'true' : 'false',
         poll_timeout_seconds: timeoutField && timeoutField.value.trim() ? timeoutField.value.trim() : '1800',
-        poll_interval_seconds: intervalField && intervalField.value.trim() ? intervalField.value.trim() : '30',
+        poll_interval_seconds: intervalField && intervalField.value.trim() ? intervalField.value.trim() : '5',
         deploy_static_vps: deployField && deployField.checked && !dryRun ? 'true' : 'false',
         target: 'production'
       }, config.medgen_actions_url || '');
@@ -5894,6 +5973,50 @@
     }
   }
 
+  function setGeneratedAgentKeyPreview(value) {
+    const field = document.querySelector('[data-agent-key-generated]');
+    const wrap = document.querySelector('[data-agent-key-generated-wrap]');
+    const copyButton = document.querySelector('[data-agent-key-copy]');
+    const hideButton = document.querySelector('[data-agent-key-hide]');
+    const hasValue = typeof value === 'string' && value !== '';
+
+    if (field instanceof HTMLInputElement) {
+      field.value = hasValue ? value : '';
+    }
+
+    [wrap, copyButton, hideButton].forEach((element) => {
+      if (element instanceof HTMLElement) {
+        element.hidden = !hasValue;
+      }
+    });
+  }
+
+  async function copyGeneratedAgentKey() {
+    const field = document.querySelector('[data-agent-key-generated]');
+    const apiKey = agentKeyField('api_key');
+    const value = field instanceof HTMLInputElement && field.value
+      ? field.value
+      : (apiKey instanceof HTMLInputElement ? apiKey.value : '');
+
+    if (!value) {
+      setAgentKeyStatus('Сначала сгенерируйте raw key.');
+      return;
+    }
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(value);
+      setAgentKeyStatus('Raw key скопирован. Сохраните его в secret storage агента как CMX_AGENT_API_KEY.');
+      return;
+    }
+
+    if (field instanceof HTMLInputElement) {
+      field.focus();
+      field.select();
+      document.execCommand('copy');
+      setAgentKeyStatus('Raw key скопирован. Сохраните его в secret storage агента как CMX_AGENT_API_KEY.');
+    }
+  }
+
   function collectAgentKeyPermissionFields() {
     const capabilities = { read: true };
 
@@ -5926,6 +6049,7 @@
     const name = agentKeyField('name');
     const role = agentKeyField('role');
     const status = agentKeyField('status');
+    const secretRef = agentKeyField('secret_ref');
     const apiKey = agentKeyField('api_key');
 
     if (name instanceof HTMLInputElement) {
@@ -5937,10 +6061,14 @@
     if (status instanceof HTMLSelectElement) {
       status.value = 'active';
     }
+    if (secretRef instanceof HTMLInputElement) {
+      secretRef.value = 'CMX_AGENT_API_KEY';
+    }
     if (apiKey instanceof HTMLInputElement) {
       apiKey.value = '';
     }
 
+    setGeneratedAgentKeyPreview('');
     syncAgentKeyPermissionFields(roleDefaultCapabilities('editor'));
   }
 
@@ -5948,6 +6076,7 @@
     const name = agentKeyField('name');
     const role = agentKeyField('role');
     const status = agentKeyField('status');
+    const secretRef = agentKeyField('secret_ref');
     const apiKey = agentKeyField('api_key');
 
     if (name instanceof HTMLInputElement) {
@@ -5959,10 +6088,14 @@
     if (status instanceof HTMLSelectElement) {
       status.value = key && key.status === 'disabled' ? 'disabled' : 'active';
     }
+    if (secretRef instanceof HTMLInputElement) {
+      secretRef.value = key && key.secret_ref ? key.secret_ref : 'CMX_AGENT_API_KEY';
+    }
     if (apiKey instanceof HTMLInputElement) {
       apiKey.value = '';
     }
 
+    setGeneratedAgentKeyPreview('');
     syncAgentKeyPermissionFields(key && key.capabilities ? key.capabilities : roleDefaultCapabilities('editor'));
   }
 
@@ -5993,6 +6126,8 @@
         + '<p>' + escapeHtml(key.role || '') + ' · ' + escapeHtml(key.status || '') + '</p></div>'
         + '<button type="button" data-agent-key-edit="' + escapeHtml(key.name || '') + '">Редактировать</button></div>'
         + '<p>Fingerprint: <code>' + escapeHtml(key.fingerprint || '') + '</code></p>'
+        + '<p>Secret ref: <code>' + escapeHtml(key.secret_ref || 'CMX_AGENT_API_KEY') + '</code></p>'
+        + '<p>Header: <code>Authorization: Bearer ${' + escapeHtml(key.secret_ref || 'CMX_AGENT_API_KEY') + '}</code></p>'
         + '<p>Права: ' + escapeHtml(enabled) + '</p>'
         + '<button type="button" class="button-link button-link--danger" data-agent-key-revoke="' + escapeHtml(key.name || '') + '">Отключить</button>'
         + '</article>';
@@ -6053,17 +6188,24 @@
     const name = agentKeyField('name');
     const role = agentKeyField('role');
     const status = agentKeyField('status');
+    const secretRef = agentKeyField('secret_ref');
     const apiKey = agentKeyField('api_key');
     const key = {
       name: name instanceof HTMLInputElement ? name.value.trim() : '',
       role: role instanceof HTMLSelectElement ? role.value : 'editor',
       status: status instanceof HTMLSelectElement && status.value === 'disabled' ? 'disabled' : 'active',
+      secret_ref: secretRef instanceof HTMLInputElement && secretRef.value.trim() ? secretRef.value.trim().toUpperCase() : 'CMX_AGENT_API_KEY',
       capabilities: collectAgentKeyPermissionFields()
     };
     const rawKey = apiKey instanceof HTMLInputElement ? apiKey.value.trim() : '';
 
     if (!key.name) {
       setAgentKeyStatus('Укажи имя агента.');
+      return;
+    }
+
+    if (!/^[A-Z][A-Z0-9_]{2,80}$/.test(key.secret_ref)) {
+      setAgentKeyStatus('Secret ref должен быть именем переменной, например CMX_AGENT_API_KEY.');
       return;
     }
 
@@ -6102,6 +6244,7 @@
       if (apiKey instanceof HTMLInputElement) {
         apiKey.value = '';
       }
+      setGeneratedAgentKeyPreview('');
       setAgentKeyStatus('Agent API key отправлен в Actions. Сырой ключ не сохранен в bootstrap; используйте его только в хранилище агента.');
       setStatusBusy('admin-agent-key-status', false);
     } catch (error) {
@@ -6150,6 +6293,8 @@
   function wireAgentKeyManager() {
     const form = document.querySelector('[data-agent-key-form]');
     const generateButton = document.querySelector('[data-agent-key-generate]');
+    const copyButton = document.querySelector('[data-agent-key-copy]');
+    const hideButton = document.querySelector('[data-agent-key-hide]');
     const newButton = document.querySelector('[data-agent-key-new]');
     const roleField = agentKeyField('role');
 
@@ -6165,14 +6310,36 @@
       generateButton.dataset.agentKeyGenerateBound = 'true';
       generateButton.addEventListener('click', () => {
         const field = agentKeyField('api_key');
+        const rawKey = generateAgentApiKey();
 
         if (field instanceof HTMLInputElement) {
-          field.value = generateAgentApiKey();
-          field.focus();
-          field.select();
+          field.value = rawKey;
         }
 
-        setAgentKeyStatus('Ключ сгенерирован локально в браузере. Скопируйте его для агента до сохранения.');
+        setGeneratedAgentKeyPreview(rawKey);
+        const generated = document.querySelector('[data-agent-key-generated]');
+
+        if (generated instanceof HTMLInputElement) {
+          generated.focus();
+          generated.select();
+        }
+
+        setAgentKeyStatus('Ключ сгенерирован локально в браузере. Нажмите "Скопировать raw key" и сохраните его в secret storage агента.');
+      });
+    }
+
+    if (copyButton && copyButton.dataset.agentKeyCopyBound !== 'true') {
+      copyButton.dataset.agentKeyCopyBound = 'true';
+      copyButton.addEventListener('click', () => {
+        copyGeneratedAgentKey().catch(() => setAgentKeyStatus('Не удалось скопировать автоматически. Выделите raw key вручную.'));
+      });
+    }
+
+    if (hideButton && hideButton.dataset.agentKeyHideBound !== 'true') {
+      hideButton.dataset.agentKeyHideBound = 'true';
+      hideButton.addEventListener('click', () => {
+        setGeneratedAgentKeyPreview('');
+        setAgentKeyStatus('Raw key скрыт на экране. Он останется в форме до сохранения или сброса.');
       });
     }
 
@@ -7456,6 +7623,8 @@
 
   document.addEventListener('DOMContentLoaded', () => {
     bootAdminTheme();
+    wireAdminBrandCollapse();
+    wireAdminNavAnchors();
     wireAccountMenu();
     wireRolePermissionsShortcut();
     wirePageFilters();
