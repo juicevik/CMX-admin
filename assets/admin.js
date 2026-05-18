@@ -9,6 +9,7 @@
     authContract: null,
     manifest: null,
     adminUsers: [],
+    agentKeys: [],
     activeSiteId: ''
   };
   const draftActionState = {
@@ -693,6 +694,197 @@
 
     if (secrets) {
       secrets.textContent = JSON.stringify(allSecretRefs(profile), null, 2);
+    }
+
+    populateSiteFleetForm(profile);
+    wireSiteFleetPanel();
+  }
+
+  function setSiteFleetFormStatus(message) {
+    const status = document.querySelector('[data-site-fleet-form-status]');
+
+    if (status) {
+      status.value = message;
+      status.textContent = message;
+    }
+  }
+
+  function setSiteFleetOutput(payload) {
+    const output = document.querySelector('[data-site-fleet-output]');
+
+    if (output) {
+      output.value = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
+    }
+  }
+
+  function setSiteFleetField(selector, value) {
+    const field = document.querySelector(selector);
+
+    if (field instanceof HTMLInputElement || field instanceof HTMLSelectElement) {
+      field.value = String(value || '');
+    }
+  }
+
+  function populateSiteFleetForm(profile) {
+    if (!document.querySelector('[data-site-fleet-field]')) {
+      return;
+    }
+
+    if (!profile) {
+      document.querySelectorAll('[data-site-fleet-field], [data-site-fleet-market-field], [data-site-fleet-route-prefix], [data-site-fleet-deploy-field]').forEach((field) => {
+        if (field instanceof HTMLInputElement || field instanceof HTMLSelectElement) {
+          field.value = '';
+        }
+      });
+      setSiteFleetField('[data-site-fleet-medgen-field="enabled"]', 'true');
+      return;
+    }
+
+    setSiteFleetField('[data-site-fleet-field="site_id"]', profile.site_id || '');
+    setSiteFleetField('[data-site-fleet-field="display_name"]', profile.display_name || '');
+    setSiteFleetField('[data-site-fleet-field="domain"]', profile.domain || '');
+    setSiteFleetField('[data-site-fleet-field="base_url"]', profile.base_url || '');
+    setSiteFleetField('[data-site-fleet-field="root_locale"]', profile.root_locale || '');
+    setSiteFleetField('[data-site-fleet-field="geo_country"]', profile.geo_country || '');
+    setSiteFleetField('[data-site-fleet-field="status"]', profile.status || 'draft');
+    setSiteFleetField('[data-site-fleet-market-field="currency"]', profile.market && profile.market.currency ? profile.market.currency : 'USD');
+    setSiteFleetField('[data-site-fleet-route-prefix="supplement"]', siteRouteNamespace(profile, 'supplement') || '/bady/');
+    setSiteFleetField('[data-site-fleet-route-prefix="author"]', siteRouteNamespace(profile, 'author') || '/experts/');
+    setSiteFleetField('[data-site-fleet-route-prefix="article"]', siteRouteNamespace(profile, 'article') || '/guides/');
+    setSiteFleetField('[data-site-fleet-deploy-field="public_root"]', profile.deploy_profile && profile.deploy_profile.public_root ? profile.deploy_profile.public_root : '');
+    setSiteFleetField('[data-site-fleet-deploy-field="environment"]', profile.deploy_profile && profile.deploy_profile.environment ? profile.deploy_profile.environment : 'production');
+    setSiteFleetField('[data-site-fleet-medgen-field="enabled"]', profile.medgen_profile && profile.medgen_profile.enabled === false ? 'false' : 'true');
+  }
+
+  function collectSiteFleetPayload(operation) {
+    const profile = {
+      market: {},
+      route_namespaces: {},
+      deploy_profile: {
+        provider: 'static_vps',
+        secret_refs: {
+          ssh_host: 'CMX_PRODUCTION_SSH_HOST',
+          ssh_port: 'CMX_PRODUCTION_SSH_PORT',
+          ssh_user: 'CMX_PRODUCTION_SSH_USER',
+          ssh_private_key: 'CMX_PRODUCTION_SSH_PRIVATE_KEY',
+          deploy_root: 'CMX_PRODUCTION_DEPLOY_ROOT',
+          tls_email: 'CMX_PRODUCTION_TLS_EMAIL'
+        }
+      },
+      medgen_profile: {
+        enabled: true,
+        secret_refs: {
+          api_base_url: 'MEDGEN_API_PUBLIC_BASE_URL',
+          api_token: 'MEDGEN_API_TOKEN'
+        }
+      }
+    };
+
+    document.querySelectorAll('[data-site-fleet-field]').forEach((field) => {
+      const key = field.getAttribute('data-site-fleet-field') || '';
+
+      if (key && (field instanceof HTMLInputElement || field instanceof HTMLSelectElement)) {
+        profile[key] = field.value.trim();
+      }
+    });
+
+    document.querySelectorAll('[data-site-fleet-market-field]').forEach((field) => {
+      const key = field.getAttribute('data-site-fleet-market-field') || '';
+
+      if (key && field instanceof HTMLInputElement && field.value.trim()) {
+        profile.market[key] = field.value.trim().toUpperCase();
+      }
+    });
+
+    if (profile.geo_country) {
+      profile.market.country = String(profile.geo_country).trim().toUpperCase();
+    }
+
+    document.querySelectorAll('[data-site-fleet-route-prefix]').forEach((field) => {
+      const key = field.getAttribute('data-site-fleet-route-prefix') || '';
+
+      if (key && field instanceof HTMLInputElement && field.value.trim()) {
+        profile.route_namespaces[key] = field.value.trim();
+      }
+    });
+
+    document.querySelectorAll('[data-site-fleet-deploy-field]').forEach((field) => {
+      const key = field.getAttribute('data-site-fleet-deploy-field') || '';
+
+      if (key && field instanceof HTMLInputElement && field.value.trim()) {
+        profile.deploy_profile[key] = field.value.trim();
+      }
+    });
+
+    document.querySelectorAll('[data-site-fleet-medgen-field]').forEach((field) => {
+      const key = field.getAttribute('data-site-fleet-medgen-field') || '';
+
+      if (key && field instanceof HTMLSelectElement) {
+        profile.medgen_profile[key] = field.value === 'true';
+      }
+    });
+
+    return {
+      operation,
+      site_id: String(profile.site_id || ''),
+      profile
+    };
+  }
+
+  async function runSiteFleetAction(operation, dryRun) {
+    if (!isGithubMode()) {
+      setSiteFleetFormStatus('Site Fleet сохраняется через CMS-admin_v2 на GitHub Pages.');
+      setSiteFleetOutput({ ok: false, issues: ['github_pages_admin_required'] });
+      return;
+    }
+
+    if (!dryRun && !window.confirm(operation === 'archive_site' ? 'Архивировать профиль сайта?' : 'Сохранить профиль сайта через GitHub Actions?')) {
+      setSiteFleetFormStatus('Операция отменена');
+      return;
+    }
+
+    setSiteFleetFormStatus(dryRun ? 'Проверяю профиль сайта...' : 'Запускаю сохранение профиля сайта...');
+    setStatusBusy('admin-site-fleet-status', true);
+
+    try {
+      const result = await githubDispatchCommand('site_fleet', collectSiteFleetPayload(operation), dryRun);
+
+      setSiteFleetOutput(result);
+      setSiteFleetFormStatus(result.ok ? 'Команда site_fleet отправлена. После завершения Actions обновите админку.' : 'Команда site_fleet не отправлена.');
+    } finally {
+      setStatusBusy('admin-site-fleet-status', false);
+    }
+  }
+
+  function wireSiteFleetPanel() {
+    const dryRunButton = document.querySelector('[data-site-fleet-dry-run]');
+    const saveButton = document.querySelector('[data-site-fleet-save]');
+    const newButton = document.querySelector('[data-site-fleet-new]');
+    const archiveButton = document.querySelector('[data-site-fleet-archive]');
+
+    if (dryRunButton && dryRunButton.dataset.siteFleetBound !== 'true') {
+      dryRunButton.dataset.siteFleetBound = 'true';
+      dryRunButton.addEventListener('click', () => runSiteFleetAction('upsert_site', true));
+    }
+
+    if (saveButton && saveButton.dataset.siteFleetBound !== 'true') {
+      saveButton.dataset.siteFleetBound = 'true';
+      saveButton.addEventListener('click', () => runSiteFleetAction('upsert_site', false));
+    }
+
+    if (newButton && newButton.dataset.siteFleetBound !== 'true') {
+      newButton.dataset.siteFleetBound = 'true';
+      newButton.addEventListener('click', () => {
+        populateSiteFleetForm(null);
+        setSiteFleetField('[data-site-fleet-field="status"]', 'draft');
+        setSiteFleetFormStatus('Заполните новый профиль сайта.');
+        setSiteFleetOutput('');
+      });
+    }
+
+    if (archiveButton && archiveButton.dataset.siteFleetBound !== 'true') {
+      archiveButton.dataset.siteFleetBound = 'true';
+      archiveButton.addEventListener('click', () => runSiteFleetAction('archive_site', false));
     }
   }
 
@@ -1949,6 +2141,18 @@
     });
     if (Object.keys(site).length > 0) {
       payload.site = site;
+    }
+
+    const target = {};
+    document.querySelectorAll('[data-medgen-target-field]').forEach((field) => {
+      const key = field.getAttribute('data-medgen-target-field') || '';
+
+      if (key && field instanceof HTMLInputElement && field.value.trim() !== '') {
+        target[key] = field.value.trim();
+      }
+    });
+    if (Object.keys(target).length > 0) {
+      payload.target = target;
     }
 
     const product = {};
@@ -5671,6 +5875,323 @@
     }
   }
 
+  function agentKeyField(name) {
+    return document.querySelector('[data-agent-key-field="' + name + '"]');
+  }
+
+  function agentKeysFromManifest(manifest) {
+    const source = manifest || adminState.manifest || {};
+
+    return Array.isArray(source.agent_keys) ? source.agent_keys : adminState.agentKeys;
+  }
+
+  function setAgentKeyStatus(message) {
+    const status = document.querySelector('[data-agent-key-status]');
+
+    if (status) {
+      status.value = message;
+      status.textContent = message;
+    }
+  }
+
+  function collectAgentKeyPermissionFields() {
+    const capabilities = { read: true };
+
+    document.querySelectorAll('[data-agent-key-permission]').forEach((field) => {
+      const name = field.getAttribute('data-agent-key-permission') || '';
+
+      if (field instanceof HTMLInputElement && name) {
+        capabilities[name] = field.checked;
+      }
+    });
+
+    capabilities.roles = false;
+
+    return capabilities;
+  }
+
+  function syncAgentKeyPermissionFields(capabilities) {
+    const values = capabilities || roleDefaultCapabilities('editor');
+
+    document.querySelectorAll('[data-agent-key-permission]').forEach((field) => {
+      const name = field.getAttribute('data-agent-key-permission') || '';
+
+      if (field instanceof HTMLInputElement && name) {
+        field.checked = values[name] === true;
+      }
+    });
+  }
+
+  function resetAgentKeyForm() {
+    const name = agentKeyField('name');
+    const role = agentKeyField('role');
+    const status = agentKeyField('status');
+    const apiKey = agentKeyField('api_key');
+
+    if (name instanceof HTMLInputElement) {
+      name.value = '';
+    }
+    if (role instanceof HTMLSelectElement) {
+      role.value = 'editor';
+    }
+    if (status instanceof HTMLSelectElement) {
+      status.value = 'active';
+    }
+    if (apiKey instanceof HTMLInputElement) {
+      apiKey.value = '';
+    }
+
+    syncAgentKeyPermissionFields(roleDefaultCapabilities('editor'));
+  }
+
+  function populateAgentKeyForm(key) {
+    const name = agentKeyField('name');
+    const role = agentKeyField('role');
+    const status = agentKeyField('status');
+    const apiKey = agentKeyField('api_key');
+
+    if (name instanceof HTMLInputElement) {
+      name.value = key && key.name ? key.name : '';
+    }
+    if (role instanceof HTMLSelectElement) {
+      role.value = key && ['admin', 'editor', 'viewer'].includes(key.role) ? key.role : 'editor';
+    }
+    if (status instanceof HTMLSelectElement) {
+      status.value = key && key.status === 'disabled' ? 'disabled' : 'active';
+    }
+    if (apiKey instanceof HTMLInputElement) {
+      apiKey.value = '';
+    }
+
+    syncAgentKeyPermissionFields(key && key.capabilities ? key.capabilities : roleDefaultCapabilities('editor'));
+  }
+
+  function renderAgentKeysList(payload) {
+    const target = document.querySelector('[data-agent-keys-list]');
+    const keys = payload && Array.isArray(payload.keys) ? payload.keys : agentKeysFromManifest();
+
+    adminState.agentKeys = keys;
+    if (adminState.manifest) {
+      adminState.manifest.agent_keys = keys;
+    }
+
+    if (!target) {
+      return;
+    }
+
+    if (!keys.length) {
+      target.innerHTML = '<p>Agent API ключи еще не заведены.</p>';
+      return;
+    }
+
+    target.innerHTML = keys.map((key) => {
+      const caps = key.capabilities || {};
+      const enabled = editableRoleCapabilities.filter((capability) => caps[capability] === true).join(', ') || 'read only';
+
+      return '<article class="admin-user-card agent-key-card" data-agent-key-card="' + escapeHtml(key.name || '') + '">'
+        + '<div class="admin-user-card__head"><div><h3>' + escapeHtml(key.name || '') + '</h3>'
+        + '<p>' + escapeHtml(key.role || '') + ' · ' + escapeHtml(key.status || '') + '</p></div>'
+        + '<button type="button" data-agent-key-edit="' + escapeHtml(key.name || '') + '">Редактировать</button></div>'
+        + '<p>Fingerprint: <code>' + escapeHtml(key.fingerprint || '') + '</code></p>'
+        + '<p>Права: ' + escapeHtml(enabled) + '</p>'
+        + '<button type="button" class="button-link button-link--danger" data-agent-key-revoke="' + escapeHtml(key.name || '') + '">Отключить</button>'
+        + '</article>';
+    }).join('');
+
+    target.querySelectorAll('[data-agent-key-edit]').forEach((button) => {
+      if (button.dataset.agentKeyEditBound === 'true') {
+        return;
+      }
+
+      button.dataset.agentKeyEditBound = 'true';
+      button.addEventListener('click', () => {
+        const name = button.getAttribute('data-agent-key-edit') || '';
+        const key = adminState.agentKeys.find((item) => item && item.name === name);
+        populateAgentKeyForm(key || null);
+        setAgentKeyStatus('Загружен ключ: ' + (key && key.name ? key.name : name) + '. Для смены секрета введите новый API key.');
+      });
+    });
+
+    target.querySelectorAll('[data-agent-key-revoke]').forEach((button) => {
+      if (button.dataset.agentKeyRevokeBound === 'true') {
+        return;
+      }
+
+      button.dataset.agentKeyRevokeBound = 'true';
+      button.addEventListener('click', () => revokeAgentKey(button.getAttribute('data-agent-key-revoke') || ''));
+    });
+  }
+
+  function generateAgentApiKey() {
+    const bytes = new Uint8Array(32);
+
+    window.crypto.getRandomValues(bytes);
+
+    return 'cmx_agent_' + Array.from(bytes)
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('');
+  }
+
+  async function sha256Hex(value) {
+    if (!window.crypto || !window.crypto.subtle || typeof TextEncoder === 'undefined') {
+      throw new Error('Браузер не поддерживает Web Crypto SHA-256.');
+    }
+
+    const digest = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+
+    return Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('');
+  }
+
+  async function saveAgentKey() {
+    if (!isGithubMode()) {
+      setAgentKeyStatus('Сохранение agent API ключей сейчас выполняется через GitHub Pages админку и Actions.');
+      return;
+    }
+
+    const name = agentKeyField('name');
+    const role = agentKeyField('role');
+    const status = agentKeyField('status');
+    const apiKey = agentKeyField('api_key');
+    const key = {
+      name: name instanceof HTMLInputElement ? name.value.trim() : '',
+      role: role instanceof HTMLSelectElement ? role.value : 'editor',
+      status: status instanceof HTMLSelectElement && status.value === 'disabled' ? 'disabled' : 'active',
+      capabilities: collectAgentKeyPermissionFields()
+    };
+    const rawKey = apiKey instanceof HTMLInputElement ? apiKey.value.trim() : '';
+
+    if (!key.name) {
+      setAgentKeyStatus('Укажи имя агента.');
+      return;
+    }
+
+    if (rawKey !== '') {
+      if (rawKey.length < 24) {
+        setAgentKeyStatus('API key должен быть не короче 24 символов.');
+        return;
+      }
+
+      try {
+        key.key_hash = 'sha256:' + await sha256Hex(rawKey);
+      } catch (error) {
+        setAgentKeyStatus(error && error.message ? error.message : 'Не удалось посчитать hash ключа.');
+        return;
+      }
+    }
+
+    setAgentKeyStatus('Отправляю agent API key в GitHub Actions...');
+    setStatusBusy('admin-agent-key-status', true);
+
+    try {
+      const result = await githubDispatchCommand('agent_keys', {
+        operation: 'upsert_key',
+        key
+      }, false);
+
+      if (result.ok === false) {
+        const issues = result.issues || (result.errors || []).map((error) => error.human || error.code || 'Agent API key не сохранен');
+        setAgentKeyStatus((issues.length > 0 ? issues : ['Agent API key не сохранен']).join('; '));
+        setStatusBusy('admin-agent-key-status', false);
+        return;
+      }
+
+      const next = (result.data && Array.isArray(result.data.keys)) ? result.data.keys : adminState.agentKeys;
+      renderAgentKeysList({ keys: next });
+      if (apiKey instanceof HTMLInputElement) {
+        apiKey.value = '';
+      }
+      setAgentKeyStatus('Agent API key отправлен в Actions. Сырой ключ не сохранен в bootstrap; используйте его только в хранилище агента.');
+      setStatusBusy('admin-agent-key-status', false);
+    } catch (error) {
+      setAgentKeyStatus('GitHub Actions недоступен: ' + (error && error.message ? error.message : 'network error'));
+      setStatusBusy('admin-agent-key-status', false);
+    }
+  }
+
+  async function revokeAgentKey(name) {
+    if (!isGithubMode()) {
+      setAgentKeyStatus('Отключение agent API ключей сейчас выполняется через GitHub Pages админку и Actions.');
+      return;
+    }
+
+    if (!name) {
+      setAgentKeyStatus('Не выбран agent API key.');
+      return;
+    }
+
+    setAgentKeyStatus('Отключаю agent API key...');
+    setStatusBusy('admin-agent-key-status', true);
+
+    try {
+      const result = await githubDispatchCommand('agent_keys', {
+        operation: 'revoke_key',
+        name
+      }, false);
+
+      if (result.ok === false) {
+        const issues = result.issues || (result.errors || []).map((error) => error.human || error.code || 'Agent API key не отключен');
+        setAgentKeyStatus((issues.length > 0 ? issues : ['Agent API key не отключен']).join('; '));
+        setStatusBusy('admin-agent-key-status', false);
+        return;
+      }
+
+      const next = (result.data && Array.isArray(result.data.keys)) ? result.data.keys : adminState.agentKeys.map((key) => key.name === name ? Object.assign({}, key, { status: 'disabled' }) : key);
+      renderAgentKeysList({ keys: next });
+      setAgentKeyStatus('Agent API key отправлен на отключение.');
+      setStatusBusy('admin-agent-key-status', false);
+    } catch (error) {
+      setAgentKeyStatus('GitHub Actions недоступен: ' + (error && error.message ? error.message : 'network error'));
+      setStatusBusy('admin-agent-key-status', false);
+    }
+  }
+
+  function wireAgentKeyManager() {
+    const form = document.querySelector('[data-agent-key-form]');
+    const generateButton = document.querySelector('[data-agent-key-generate]');
+    const newButton = document.querySelector('[data-agent-key-new]');
+    const roleField = agentKeyField('role');
+
+    if (form && form.dataset.agentKeyFormBound !== 'true') {
+      form.dataset.agentKeyFormBound = 'true';
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        saveAgentKey();
+      });
+    }
+
+    if (generateButton && generateButton.dataset.agentKeyGenerateBound !== 'true') {
+      generateButton.dataset.agentKeyGenerateBound = 'true';
+      generateButton.addEventListener('click', () => {
+        const field = agentKeyField('api_key');
+
+        if (field instanceof HTMLInputElement) {
+          field.value = generateAgentApiKey();
+          field.focus();
+          field.select();
+        }
+
+        setAgentKeyStatus('Ключ сгенерирован локально в браузере. Скопируйте его для агента до сохранения.');
+      });
+    }
+
+    if (newButton && newButton.dataset.agentKeyNewBound !== 'true') {
+      newButton.dataset.agentKeyNewBound = 'true';
+      newButton.addEventListener('click', () => {
+        resetAgentKeyForm();
+        setAgentKeyStatus('Форма готова для нового агентского ключа.');
+      });
+    }
+
+    if (roleField && roleField.dataset.agentKeyRoleBound !== 'true') {
+      roleField.dataset.agentKeyRoleBound = 'true';
+      roleField.addEventListener('change', () => {
+        syncAgentKeyPermissionFields(roleDefaultCapabilities(roleField.value || 'editor'));
+      });
+    }
+  }
+
   async function saveEditorPermissions(authContract) {
     const path = authEndpoint(authContract, 'role_permissions') || protectedEndpointFallbacks.role_permissions;
     const capabilities = collectEditorPermissionFields();
@@ -5782,6 +6303,8 @@
     renderAdminUsersList({ users: adminState.adminUsers }, runtime);
     loadAdminUsers(readAuthContract() || authContract, runtime);
     wireAdminUserManager(readAuthContract() || authContract, runtime);
+    renderAgentKeysList({ keys: agentKeysFromManifest(manifest) });
+    wireAgentKeyManager();
 
     const saveButton = panel.querySelector('[data-role-permissions-save]');
 
@@ -5861,6 +6384,7 @@
     adminState.actionContracts = null;
     adminState.authContract = null;
     adminState.manifest = null;
+    adminState.agentKeys = [];
     adminState.activeSiteId = '';
     designState.booted = false;
     resetEditorialWidgetState();
@@ -5872,6 +6396,7 @@
     renderSiteFleet({});
     setDomainOutput('');
     renderRolePermissions({}, readAuthContract());
+    renderAgentKeysList({ keys: [] });
     renderAdminMetrics({ summary: {} });
     ['[data-page-list]', '[data-workflow-actions]', '[data-workflow-pages]', '[data-module-grid]', '[data-runtime-grid]'].forEach((selector) => {
       const node = document.querySelector(selector);
@@ -5909,6 +6434,7 @@
     adminState.manifest = manifest;
     adminState.actionContracts = contracts;
     adminState.authContract = authContract;
+    adminState.agentKeys = Array.isArray(manifest.agent_keys) ? manifest.agent_keys : [];
     if (!adminState.activeSiteId && Array.isArray(manifest.sites) && manifest.sites[0]) {
       adminState.activeSiteId = String(manifest.sites[0].site_id || '');
     }
