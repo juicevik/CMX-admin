@@ -781,9 +781,7 @@
       byId('admin-create-description') ? byId('admin-create-description').value : '',
       title
     );
-    const languageFolder = byId('admin-create-locale-folder')
-      ? normalizeSlug(byId('admin-create-locale-folder').value).slice(0, 2)
-      : 'ru';
+    const languageFolder = '';
     const locale = localeForLanguageFolder(languageFolder);
 
     return {
@@ -848,7 +846,7 @@
       title: page.title || values.title,
       route: page.route || values.route,
       locale: page.locale || values.locale,
-      locale_folder: page.locale_folder || values.languageFolder,
+      locale_folder: values.languageFolder,
       page_type: page.page_type || template.page_type || '',
       create_mode: true,
       payload_templates: payloadTemplates
@@ -958,7 +956,7 @@
       title: draftPage.title || '',
       route: draftPage.route || page.route || '',
       original_route: page.route || draftPage.route || '',
-      locale_folder: draftPage.locale_folder || page.locale_folder || '',
+      locale_folder: '',
       seo_title: seo.title || '',
       seo_description: seo.description || '',
       seo_robots: seo.robots || 'index,follow'
@@ -980,7 +978,7 @@
       route: byId('admin-page-editor-route') ? normalizeRoutePath(byId('admin-page-editor-route').value) : '',
       seo_title: byId('admin-page-editor-seo-title') ? byId('admin-page-editor-seo-title').value.trim() : '',
       seo_description: byId('admin-page-editor-seo-description') ? byId('admin-page-editor-seo-description').value.trim() : '',
-      locale_folder: byId('admin-page-editor-locale-folder') ? byId('admin-page-editor-locale-folder').value.trim() : '',
+      locale_folder: '',
       seo_robots: byId('admin-page-editor-seo-robots') ? byId('admin-page-editor-seo-robots').value : 'index,follow'
     };
   }
@@ -1003,7 +1001,7 @@
     }
 
     if (byId('admin-page-editor-locale-folder')) {
-      byId('admin-page-editor-locale-folder').value = values.locale_folder || '';
+      byId('admin-page-editor-locale-folder').value = '';
     }
 
     if (byId('admin-page-editor-seo-robots')) {
@@ -1066,7 +1064,7 @@
 
     selection.payload.page.title = values.title;
     selection.payload.page.route = nextRoute;
-    selection.payload.page.locale_folder = values.locale_folder || '';
+    selection.payload.page.locale_folder = '';
 
     if (!selection.payload.page.seo || typeof selection.payload.page.seo !== 'object') {
       selection.payload.page.seo = {};
@@ -1430,7 +1428,7 @@
     }
 
     if (languageInput) {
-      languageInput.value = page.locale_folder || '';
+      languageInput.value = '';
     }
 
     syncEditorialModeControls(contracts);
@@ -2268,7 +2266,7 @@
       }
 
       if (languageInput) {
-        languageInput.value = page.locale_folder || '';
+        languageInput.value = '';
       }
 
       if (mediaPath) {
@@ -2490,7 +2488,7 @@
       actor: editorialActorPayload(),
       content_type: contentType,
       mode,
-      language_folder: normalizeSlug(languageInput ? languageInput.value : '').slice(0, 2),
+      language_folder: '',
       slug,
       route,
       target_path: mode === 'edit' && selectedPage ? selectedPage.resource : '',
@@ -3163,7 +3161,7 @@
       }
 
       if (languageInput) {
-        languageInput.value = page.locale_folder || '';
+        languageInput.value = '';
       }
 
       if (mediaPath) {
@@ -3344,7 +3342,7 @@
       actor: editorialActorPayload(),
       content_type: 'product',
       mode,
-      language_folder: normalizeSlug(languageInput ? languageInput.value : '').slice(0, 2),
+      language_folder: '',
       slug,
       route,
       target_path: mode === 'edit' && selectedPage ? selectedPage.resource : '',
@@ -3808,8 +3806,8 @@
         }
       },
       features: {
-        theme_toggle: features.theme_toggle === true,
-        locale_switcher: features.locale_switcher === true,
+        theme_toggle: false,
+        locale_switcher: false,
         footer_share_robots: ['follow', 'nofollow', 'noindex,nofollow'].includes(features.footer_share_robots)
           ? features.footer_share_robots
           : 'nofollow'
