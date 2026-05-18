@@ -248,7 +248,7 @@
   function formatMinutes(value) {
     const minutes = Math.max(0, Math.round(Number(value) || 0));
 
-    return minutes + ' мин';
+    return minutes + 'м';
   }
 
   function currentMonthStartIso() {
@@ -275,7 +275,7 @@
       return sum + ((updated - started) / 60000);
     }, 0);
 
-    return 'Actions: ~' + formatMinutes(wallMinutes) + ' · ' + totalCount + ' запусков';
+    return 'Act ~' + formatMinutes(wallMinutes) + ' / ' + totalCount + ' run';
   }
 
   async function loadRepoActionsRuns(repository) {
@@ -309,7 +309,7 @@
     const repository = config && config.repository ? String(config.repository) : '';
 
     if (!owner || !repository) {
-      return 'Actions: недоступны';
+      return 'Act n/a';
     }
 
     try {
@@ -320,10 +320,10 @@
         const included = Number(billing.payload.included_minutes || 0);
 
         if (included > 0) {
-          return 'Actions: ' + formatMinutes(used) + '/' + formatMinutes(included);
+          return 'Act ' + formatMinutes(used) + '/' + formatMinutes(included);
         }
 
-        return 'Actions: ' + formatMinutes(used);
+        return 'Act ' + formatMinutes(used);
       }
     } catch (error) {
       // Billing requires account-level scope; repo workflow data below is the safe fallback.
@@ -339,7 +339,7 @@
       // Keep the widget useful even when Actions read access is not available.
     }
 
-    return 'Actions: недоступны';
+    return 'Act n/a';
   }
 
   function githubToken() {
@@ -377,11 +377,11 @@
 
       const core = payload.resources.core || {};
       const actionsLabel = await loadGithubActionsUsage();
-      const resetAt = core.reset ? new Date(Number(core.reset) * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'unknown';
+      const resetAt = core.reset ? new Date(Number(core.reset) * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'n/a';
       const parts = [
-        'Core: ' + (core.remaining ?? '?') + '/' + (core.limit ?? '?'),
+        'API ' + (core.remaining ?? '?') + '/' + (core.limit ?? '?'),
         actionsLabel,
-        'reset: ' + resetAt
+        'R ' + resetAt
       ];
 
       setGithubRateLimit(parts.join(' · '), true);
@@ -5428,15 +5428,15 @@
       ? 'Готово'
       : 'Ожидание';
     const statusDetail = totalPages || modules
-      ? 'Страниц: ' + totalPages + ' · запущено: ' + publishedPages + ' · сохранено: ' + totalPages + ' · модулей: ' + modules
+      ? 'стр ' + totalPages + ' · опубл ' + publishedPages + ' · сохр ' + totalPages + ' · мод ' + modules
       : 'Данные еще загружаются';
 
     target.innerHTML = [
       metricHtml('Статус', statusMessage, statusDetail, 'metric--status'),
-      metricHtml('Pages', totalPages),
-      metricHtml('Published', publishedPages),
-      metricHtml('Modules', modules),
-      metricHtml('Version', manifest && manifest.version ? manifest.version : 'n/a'),
+      metricHtml('Страниц', totalPages),
+      metricHtml('Опубл.', publishedPages),
+      metricHtml('Модулей', modules),
+      metricHtml('Версия', manifest && manifest.version ? manifest.version : 'n/a'),
       githubMetricHtml(githubRateMessage)
     ].join('');
   }

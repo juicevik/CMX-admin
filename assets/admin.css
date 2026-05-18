@@ -782,8 +782,8 @@ code {
   position: relative;
   display: grid;
   align-content: start;
-  min-height: 8.25rem;
-  padding: 1rem 1rem 0.9rem;
+  min-height: 5.75rem;
+  padding: 0.72rem 0.78rem 0.66rem;
   overflow: hidden;
   border-color: color-mix(in srgb, var(--admin-accent) 22%, var(--admin-border));
   background:
@@ -796,9 +796,9 @@ code {
 
 .metric::before {
   content: "";
-  width: 2.25rem;
-  height: 2.25rem;
-  margin-bottom: 0.65rem;
+  width: 1.45rem;
+  height: 1.45rem;
+  margin-bottom: 0.4rem;
   border: 1px solid color-mix(in srgb, var(--admin-accent) 52%, var(--admin-border));
   border-radius: 999px;
   background:
@@ -810,7 +810,7 @@ code {
   content: "";
   align-self: end;
   width: min(100%, 9rem);
-  height: 1.1rem;
+  height: 0.62rem;
   margin-top: auto;
   background:
     radial-gradient(circle at 100% 66%, var(--admin-accent) 0 0.14rem, transparent 0.15rem),
@@ -838,7 +838,7 @@ code {
 .metric--github-rate h1 {
   margin: 0;
   color: var(--admin-muted);
-  font-size: 0.72rem;
+  font-size: 0.62rem;
   font-weight: 850;
   letter-spacing: 0;
   line-height: 1.1;
@@ -847,7 +847,7 @@ code {
 .metric--github-rate h3 {
   margin: 0.32rem 0 0;
   color: var(--admin-text);
-  font-size: clamp(0.72rem, 1.35vw, 0.9rem);
+  font-size: clamp(0.55rem, 0.82vw, 0.68rem);
   font-weight: 900;
   letter-spacing: 0;
   line-height: 1.28;
@@ -862,7 +862,7 @@ code {
 .module-card__title span,
 .pill {
   color: var(--admin-muted);
-  font-size: 0.7rem;
+  font-size: 0.62rem;
   font-weight: 800;
 }
 
@@ -870,23 +870,23 @@ code {
   display: block;
   margin-top: 0.2rem;
   color: var(--admin-accent-strong);
-  font-size: clamp(1.35rem, 2.4vw, 2rem);
+  font-size: clamp(1.05rem, 1.65vw, 1.42rem);
   line-height: 1.12;
   overflow-wrap: anywhere;
 }
 
 .metric small {
   display: block;
-  margin-top: 0.32rem;
+  margin-top: 0.22rem;
   color: var(--admin-muted);
-  font-size: 0.68rem;
+  font-size: 0.58rem;
   font-weight: 750;
   line-height: 1.25;
 }
 
 .metric--status strong {
   color: var(--admin-text);
-  font-size: clamp(0.86rem, 1.1vw, 1rem);
+  font-size: clamp(0.74rem, 0.9vw, 0.86rem);
 }
 
 .admin-section {
@@ -1456,44 +1456,44 @@ code {
 }
 
 :root[data-admin-theme="dark"] .metric {
-  min-height: 8.25rem;
-  padding: 1rem 1rem 0.9rem;
+  min-height: 5.75rem;
+  padding: 0.72rem 0.78rem 0.66rem;
   border-radius: var(--admin-radius-card);
 }
 
 :root[data-admin-theme="dark"] .metric::before {
-  width: 2.25rem;
-  height: 2.25rem;
-  margin-bottom: 0.65rem;
+  width: 1.45rem;
+  height: 1.45rem;
+  margin-bottom: 0.4rem;
 }
 
 :root[data-admin-theme="dark"] .metric::after {
   width: min(100%, 9rem);
-  height: 1.1rem;
+  height: 0.62rem;
 }
 
 :root[data-admin-theme="dark"] .metric span,
 :root[data-admin-theme="dark"] .metric--github-rate h1 {
-  font-size: 0.7rem;
+  font-size: 0.62rem;
 }
 
 :root[data-admin-theme="dark"] .metric strong {
   margin-top: 0.2rem;
-  font-size: clamp(1.35rem, 2.4vw, 2rem);
+  font-size: clamp(1.05rem, 1.65vw, 1.42rem);
 }
 
 :root[data-admin-theme="dark"] .metric small {
-  margin-top: 0.32rem;
-  font-size: 0.68rem;
+  margin-top: 0.22rem;
+  font-size: 0.58rem;
 }
 
 :root[data-admin-theme="dark"] .metric--status strong,
 :root[data-admin-theme="dark"] .metric:nth-child(5) strong {
-  font-size: clamp(1.05rem, 1.7vw, 1.3rem);
+  font-size: clamp(0.74rem, 0.9vw, 0.86rem);
 }
 
 :root[data-admin-theme="dark"] .metric--github-rate h3 {
-  font-size: clamp(0.72rem, 1.35vw, 0.9rem);
+  font-size: clamp(0.55rem, 0.82vw, 0.68rem);
   line-height: 1.28;
 }
 
@@ -1513,44 +1513,44 @@ code {
   }
 
   :root:not([data-admin-theme]) .metric {
-    min-height: 8.25rem;
-    padding: 1rem 1rem 0.9rem;
+    min-height: 5.75rem;
+    padding: 0.72rem 0.78rem 0.66rem;
     border-radius: var(--admin-radius-card);
   }
 
   :root:not([data-admin-theme]) .metric::before {
-    width: 2.25rem;
-    height: 2.25rem;
-    margin-bottom: 0.65rem;
+    width: 1.45rem;
+    height: 1.45rem;
+    margin-bottom: 0.4rem;
   }
 
   :root:not([data-admin-theme]) .metric::after {
     width: min(100%, 9rem);
-    height: 1.1rem;
+    height: 0.62rem;
   }
 
   :root:not([data-admin-theme]) .metric span,
   :root:not([data-admin-theme]) .metric--github-rate h1 {
-    font-size: 0.7rem;
+    font-size: 0.62rem;
   }
 
   :root:not([data-admin-theme]) .metric strong {
     margin-top: 0.2rem;
-    font-size: clamp(1.35rem, 2.4vw, 2rem);
+    font-size: clamp(1.05rem, 1.65vw, 1.42rem);
   }
 
   :root:not([data-admin-theme]) .metric small {
-    margin-top: 0.32rem;
-    font-size: 0.68rem;
+    margin-top: 0.22rem;
+    font-size: 0.58rem;
   }
 
   :root:not([data-admin-theme]) .metric--status strong,
   :root:not([data-admin-theme]) .metric:nth-child(5) strong {
-    font-size: clamp(1.05rem, 1.7vw, 1.3rem);
+    font-size: clamp(0.74rem, 0.9vw, 0.86rem);
   }
 
   :root:not([data-admin-theme]) .metric--github-rate h3 {
-    font-size: clamp(0.72rem, 1.35vw, 0.9rem);
+    font-size: clamp(0.55rem, 0.82vw, 0.68rem);
     line-height: 1.28;
   }
 }
