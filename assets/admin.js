@@ -1719,6 +1719,119 @@
     }
   }
 
+  function setMedGenStatus(message) {
+    const status = byId('admin-medgen-status');
+
+    if (status) {
+      status.value = message;
+      status.textContent = message;
+    }
+  }
+
+  function setMedGenOutput(payload) {
+    const output = byId('admin-medgen-output');
+
+    if (output) {
+      output.value = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
+    }
+  }
+
+  function collectMedGenPayload() {
+    const payload = {};
+
+    document.querySelectorAll('[data-medgen-field]').forEach((field) => {
+      const key = field.getAttribute('data-medgen-field') || '';
+
+      if (!key) {
+        return;
+      }
+
+      if ((field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement || field instanceof HTMLSelectElement) && field.value.trim() !== '') {
+        payload[key] = field.value.trim();
+      }
+    });
+
+    const site = {};
+    document.querySelectorAll('[data-medgen-site-field]').forEach((field) => {
+      const key = field.getAttribute('data-medgen-site-field') || '';
+
+      if (key && field instanceof HTMLInputElement && field.value.trim() !== '') {
+        site[key] = field.value.trim();
+      }
+    });
+    if (Object.keys(site).length > 0) {
+      payload.site = site;
+    }
+
+    const product = {};
+    document.querySelectorAll('[data-medgen-product-field]').forEach((field) => {
+      const key = field.getAttribute('data-medgen-product-field') || '';
+
+      if (key && field instanceof HTMLInputElement && field.value.trim() !== '') {
+        product[key] = field.value.trim();
+      }
+    });
+    if (Object.keys(product).length > 0) {
+      payload.product = product;
+    }
+
+    const author = {};
+    document.querySelectorAll('[data-medgen-author-field]').forEach((field) => {
+      const key = field.getAttribute('data-medgen-author-field') || '';
+
+      if (key && (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) && field.value.trim() !== '') {
+        author[key] = field.value.trim();
+      }
+    });
+    if (Object.keys(author).length > 0) {
+      payload.author = author;
+    }
+
+    return {
+      payload,
+      publish: true
+    };
+  }
+
+  async function runMedGenWorkflow(dryRun) {
+    if (!isGithubMode()) {
+      setMedGenStatus('MedGen доступен только в CMS-admin_v2 на GitHub Pages.');
+      setMedGenOutput({ ok: false, issues: ['github_pages_admin_required'] });
+      return;
+    }
+
+    if (!dryRun && !window.confirm('Запустить MedGen workflow? Генерация может занять до 30 минут.')) {
+      setMedGenStatus('MedGen запуск отменен');
+      return;
+    }
+
+    const config = readGithubConfig();
+    const timeoutField = byId('admin-medgen-timeout');
+    const intervalField = byId('admin-medgen-interval');
+    const deployField = byId('admin-medgen-deploy');
+    const workflow = config.medgen_workflow_id || 'medgen-content.yml';
+    const payload = collectMedGenPayload();
+
+    setMedGenStatus(dryRun ? 'Проверяю MedGen payload...' : 'Запускаю MedGen workflow...');
+    setStatusBusy('admin-medgen-status', true);
+
+    try {
+      const result = await githubDispatchWorkflow(workflow, {
+        medgen_payload_json: JSON.stringify(payload),
+        dry_run: dryRun ? 'true' : 'false',
+        poll_timeout_seconds: timeoutField && timeoutField.value.trim() ? timeoutField.value.trim() : '1800',
+        poll_interval_seconds: intervalField && intervalField.value.trim() ? intervalField.value.trim() : '30',
+        deploy_static_vps: deployField && deployField.checked && !dryRun ? 'true' : 'false',
+        target: 'production'
+      }, config.medgen_actions_url || '');
+
+      setMedGenOutput(result);
+      setMedGenStatus(result.ok ? 'MedGen workflow запущен. Следите за статусом в GitHub Actions.' : 'MedGen workflow не запущен.');
+    } finally {
+      setStatusBusy('admin-medgen-status', false);
+    }
+  }
+
   function slugFromDomainValue(value) {
     const normalized = String(value || '')
       .trim()
@@ -4306,6 +4419,27 @@
     }
   }
 
+  function wireMedGenPanel() {
+    const panel = document.querySelector('[data-medgen-panel]');
+
+    if (!panel || panel.dataset.medgenBooted === 'true') {
+      return;
+    }
+
+    panel.dataset.medgenBooted = 'true';
+
+    const dryRun = panel.querySelector('[data-medgen-dry-run]');
+    const run = panel.querySelector('[data-medgen-run]');
+
+    if (dryRun) {
+      dryRun.addEventListener('click', () => runMedGenWorkflow(true));
+    }
+
+    if (run) {
+      run.addEventListener('click', () => runMedGenWorkflow(false));
+    }
+  }
+
   function resetDraftActionState() {
     draftActionState.dryRun = null;
     setDraftActionStatus('Dry-run required before execute');
@@ -5169,7 +5303,7 @@
     const productCards = contracts && Array.isArray(contracts.pages)
       ? contracts.pages.filter((page) => editorialContentTypeForPage(page) === 'product').length
       : 0;
-    const values = { 'main-workspace': editorialTypes + productCards, editorial: editorialTypes, 'product-cards': productCards, 'role-permissions': 6, 'site-launch': 6, content: pages, workflow: actions + createTemplates, modules, design: 2, system, technical: pages + modules + actions };
+    const values = { 'main-workspace': editorialTypes + productCards, editorial: editorialTypes, 'product-cards': productCards, 'role-permissions': 6, 'site-launch': 6, medgen: 4, sites: 1, content: pages, workflow: actions + createTemplates, modules, design: 2, system, technical: pages + modules + actions };
 
     Object.entries(values).forEach(([section, count]) => {
       const node = document.querySelector('[data-section-count="' + section + '"]');
@@ -5265,6 +5399,7 @@
     setSectionCounts(manifest, contracts);
     setAdminBootStatus('Готово');
     wirePageFilters();
+    wireMedGenPanel();
     bootComposer();
     wireEditorialWidget(adminState.actionContracts, adminState.authContract);
     wireProductCardEditor(adminState.actionContracts, adminState.authContract);
