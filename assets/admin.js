@@ -821,13 +821,86 @@
   }
 
   function profileDeployLabel(profile) {
-    const deploy = profile && profile.deploy_profile && typeof profile.deploy_profile === 'object'
-      ? profile.deploy_profile
-      : {};
-    const provider = String(deploy.provider || 'static_vps');
+    const deploy = deployProfile(profile);
+    const provider = hostingProvider(profile);
     const environment = String(deploy.environment || 'production');
+    const cloudflare = deploy && deploy.cloudflare && typeof deploy.cloudflare === 'object'
+      ? deploy.cloudflare
+      : {};
+
+    if (provider === 'cloudflare_pages') {
+      return provider + ' / ' + (cloudflare.pages_project || environment);
+    }
 
     return provider + ' / ' + environment;
+  }
+
+  function deployProfile(profile) {
+    return profile && profile.deploy_profile && typeof profile.deploy_profile === 'object'
+      ? profile.deploy_profile
+      : {};
+  }
+
+  function hostingProvider(profile) {
+    const provider = String(deployProfile(profile).provider || 'static_vps');
+
+    return provider === 'cloudflare_pages' ? 'cloudflare_pages' : 'static_vps';
+  }
+
+  function hostingModeLabel(profile) {
+    return hostingProvider(profile) === 'cloudflare_pages'
+      ? 'Cloudflare Pages / Worker'
+      : 'VPS / SSH static';
+  }
+
+  function syncActiveHostingActions(profile) {
+    const provider = profile ? hostingProvider(profile) : '';
+
+    document.body.dataset.hostingProvider = provider || 'none';
+    document.querySelectorAll('[data-hosting-provider-action]').forEach((control) => {
+      if (!(control instanceof HTMLButtonElement || control instanceof HTMLInputElement || control instanceof HTMLSelectElement)) {
+        return;
+      }
+
+      const expected = control.getAttribute('data-hosting-provider-action') || '';
+      const disabled = Boolean(profile) && expected !== provider;
+      control.disabled = disabled;
+      control.title = disabled
+        ? 'Недоступно для выбранной среды: активный сайт работает в ' + hostingModeLabel(profile) + '.'
+        : '';
+
+      if (disabled && control instanceof HTMLInputElement && control.type === 'checkbox') {
+        control.checked = false;
+      }
+    });
+  }
+
+  function syncProviderPanels(selector, provider) {
+    document.querySelectorAll(selector).forEach((panel) => {
+      const expected = panel.getAttribute(selector.slice(1, -1)) || '';
+      const active = expected === provider;
+
+      panel.hidden = !active;
+      panel.querySelectorAll('input, select, textarea, button').forEach((control) => {
+        if (control instanceof HTMLInputElement || control instanceof HTMLSelectElement || control instanceof HTMLTextAreaElement || control instanceof HTMLButtonElement) {
+          control.disabled = !active;
+        }
+      });
+    });
+  }
+
+  function syncSiteFleetHostingFields() {
+    const field = document.querySelector('[data-site-fleet-deploy-field="provider"]');
+    const provider = field && field.value === 'cloudflare_pages' ? 'cloudflare_pages' : 'static_vps';
+
+    syncProviderPanels('[data-site-fleet-hosting-panel]', provider);
+  }
+
+  function syncDomainHostingFields() {
+    const field = document.querySelector('[data-domain-hosting-provider-select]');
+    const provider = field && field.value === 'cloudflare_pages' ? 'cloudflare_pages' : 'static_vps';
+
+    syncProviderPanels('[data-domain-hosting-panel]', provider);
   }
 
   function syncSiteScopedDefaults(profile) {
@@ -988,6 +1061,7 @@
     const fieldValue = {
       domain: profile ? String(profile.domain || '-') : '-',
       locale: profile ? String(profile.root_locale || '-') + (profile.geo_country ? ' / ' + String(profile.geo_country) : '') : '-',
+      hosting: profile ? hostingModeLabel(profile) : '-',
       deploy: profile ? profileDeployLabel(profile) : '-',
       content: profile ? String(profile.content_mode || 'manual') : '-'
     };
@@ -1008,6 +1082,7 @@
     }
 
     syncSiteScopedDefaults(profile);
+    syncActiveHostingActions(profile);
     syncSiteContextGate(profile, profiles);
   }
 
@@ -1090,12 +1165,14 @@
     }
 
     if (!profile) {
-      document.querySelectorAll('[data-site-fleet-field], [data-site-fleet-market-field], [data-site-fleet-route-prefix], [data-site-fleet-deploy-field]').forEach((field) => {
+      document.querySelectorAll('[data-site-fleet-field], [data-site-fleet-market-field], [data-site-fleet-route-prefix], [data-site-fleet-deploy-field], [data-site-fleet-cloudflare-field]').forEach((field) => {
         if (field instanceof HTMLInputElement || field instanceof HTMLSelectElement) {
           field.value = '';
         }
       });
       setSiteFleetField('[data-site-fleet-medgen-field="enabled"]', 'true');
+      setSiteFleetField('[data-site-fleet-deploy-field="provider"]', 'static_vps');
+      syncSiteFleetHostingFields();
       return;
     }
 
@@ -1110,9 +1187,20 @@
     setSiteFleetField('[data-site-fleet-route-prefix="supplement"]', siteRouteNamespace(profile, 'supplement') || '/bady/');
     setSiteFleetField('[data-site-fleet-route-prefix="author"]', siteRouteNamespace(profile, 'author') || '/experts/');
     setSiteFleetField('[data-site-fleet-route-prefix="article"]', siteRouteNamespace(profile, 'article') || '/guides/');
+    setSiteFleetField('[data-site-fleet-deploy-field="provider"]', profile.deploy_profile && profile.deploy_profile.provider ? profile.deploy_profile.provider : 'static_vps');
     setSiteFleetField('[data-site-fleet-deploy-field="public_root"]', profile.deploy_profile && profile.deploy_profile.public_root ? profile.deploy_profile.public_root : '');
     setSiteFleetField('[data-site-fleet-deploy-field="environment"]', profile.deploy_profile && profile.deploy_profile.environment ? profile.deploy_profile.environment : 'production');
+    const cloudflare = profile.deploy_profile && profile.deploy_profile.cloudflare && typeof profile.deploy_profile.cloudflare === 'object'
+      ? profile.deploy_profile.cloudflare
+      : {};
+    setSiteFleetField('[data-site-fleet-cloudflare-field="pages_project"]', cloudflare.pages_project || '');
+    setSiteFleetField('[data-site-fleet-cloudflare-field="worker_script"]', cloudflare.worker_script || 'cmx-panel-api');
+    setSiteFleetField('[data-site-fleet-cloudflare-field="d1_database"]', cloudflare.d1_database || 'cmx_panel');
+    setSiteFleetField('[data-site-fleet-cloudflare-field="r2_bucket"]', cloudflare.r2_bucket || 'cmx-sites');
+    setSiteFleetField('[data-site-fleet-cloudflare-field="kv_namespace"]', cloudflare.kv_namespace || 'cmx_sessions');
+    setSiteFleetField('[data-site-fleet-cloudflare-field="custom_domain_mode"]', cloudflare.custom_domain_mode || 'manual_dns');
     setSiteFleetField('[data-site-fleet-medgen-field="enabled"]', profile.medgen_profile && profile.medgen_profile.enabled === false ? 'false' : 'true');
+    syncSiteFleetHostingFields();
   }
 
   function collectSiteFleetPayload(operation) {
@@ -1121,13 +1209,16 @@
       route_namespaces: {},
       deploy_profile: {
         provider: 'static_vps',
+        cloudflare: {},
         secret_refs: {
           ssh_host: 'CMX_PRODUCTION_SSH_HOST',
           ssh_port: 'CMX_PRODUCTION_SSH_PORT',
           ssh_user: 'CMX_PRODUCTION_SSH_USER',
           ssh_private_key: 'CMX_PRODUCTION_SSH_PRIVATE_KEY',
           deploy_root: 'CMX_PRODUCTION_DEPLOY_ROOT',
-          tls_email: 'CMX_PRODUCTION_TLS_EMAIL'
+          tls_email: 'CMX_PRODUCTION_TLS_EMAIL',
+          cloudflare_account_id: 'CLOUDFLARE_ACCOUNT_ID',
+          cloudflare_api_token: 'CLOUDFLARE_API_TOKEN'
         }
       },
       medgen_profile: {
@@ -1170,8 +1261,16 @@
     document.querySelectorAll('[data-site-fleet-deploy-field]').forEach((field) => {
       const key = field.getAttribute('data-site-fleet-deploy-field') || '';
 
-      if (key && field instanceof HTMLInputElement && field.value.trim()) {
+      if (key && (field instanceof HTMLInputElement || field instanceof HTMLSelectElement) && field.value.trim()) {
         profile.deploy_profile[key] = field.value.trim();
+      }
+    });
+
+    document.querySelectorAll('[data-site-fleet-cloudflare-field]').forEach((field) => {
+      const key = field.getAttribute('data-site-fleet-cloudflare-field') || '';
+
+      if (key && (field instanceof HTMLInputElement || field instanceof HTMLSelectElement) && field.value.trim()) {
+        profile.deploy_profile.cloudflare[key] = field.value.trim();
       }
     });
 
@@ -1245,6 +1344,14 @@
       archiveButton.dataset.siteFleetBound = 'true';
       archiveButton.addEventListener('click', () => runSiteFleetAction('archive_site', false));
     }
+
+    const providerField = document.querySelector('[data-site-fleet-deploy-field="provider"]');
+    if (providerField && providerField.dataset.siteFleetProviderBound !== 'true') {
+      providerField.dataset.siteFleetProviderBound = 'true';
+      providerField.addEventListener('change', syncSiteFleetHostingFields);
+    }
+
+    syncSiteFleetHostingFields();
   }
 
   function setAdminBootStatus(message) {
@@ -2654,7 +2761,7 @@
         dry_run: dryRun ? 'true' : 'false',
         poll_timeout_seconds: timeoutField && timeoutField.value.trim() ? timeoutField.value.trim() : '1800',
         poll_interval_seconds: intervalField && intervalField.value.trim() ? intervalField.value.trim() : '5',
-        deploy_static_vps: deployField && deployField.checked && !dryRun ? 'true' : 'false',
+        deploy_static_vps: deployField && deployField.checked && !dryRun && hostingProvider(activeSiteProfile()) === 'static_vps' ? 'true' : 'false',
         target: 'production'
       }, config.medgen_actions_url || '');
 
@@ -2751,6 +2858,7 @@
 
     payload.route_namespaces = routeNamespaces;
     payload.deploy_target = collectDomainDeployTargetPayload();
+    payload.deploy_profile = collectDomainDeployProfilePayload();
 
     return payload;
   }
@@ -2776,6 +2884,31 @@
     });
 
     return target;
+  }
+
+  function collectDomainDeployProfilePayload() {
+    const deployTarget = collectDomainDeployTargetPayload();
+    const provider = deployTarget.provider === 'cloudflare_pages' ? 'cloudflare_pages' : 'static_vps';
+    const profile = {
+      provider,
+      environment: 'production'
+    };
+
+    if (provider === 'cloudflare_pages') {
+      profile.cloudflare = {};
+      document.querySelectorAll('[data-domain-cloudflare-field]').forEach((field) => {
+        const key = field.getAttribute('data-domain-cloudflare-field') || '';
+
+        if (key && (field instanceof HTMLInputElement || field instanceof HTMLSelectElement) && field.value.trim()) {
+          profile.cloudflare[key] = field.value.trim();
+        }
+      });
+      profile.public_root = '';
+    } else {
+      profile.public_root = deployTarget.root_path || '';
+    }
+
+    return profile;
   }
 
   async function runSiteRebrandAction(authContract, dryRun) {
@@ -2846,6 +2979,13 @@
     if (!isGithubMode()) {
       setServerMaintenanceStatus('Server maintenance доступен только в GitHub Pages-админке.');
       setServerMaintenanceOutput({ ok: false, issues: ['github_pages_admin_required'] });
+      return;
+    }
+
+    const providerField = document.querySelector('[data-domain-hosting-provider-select]');
+    if (providerField && providerField.value === 'cloudflare_pages') {
+      setServerMaintenanceStatus('VPS обслуживание скрыто для Cloudflare Pages профиля.');
+      setServerMaintenanceOutput({ ok: false, issues: ['static_vps_required'] });
       return;
     }
 
@@ -3574,6 +3714,7 @@
       'data-site-fleet-save': 'Сохраняет профиль сайта: домен, GEO, deploy и secret_refs.',
       'data-site-fleet-new': 'Очищает форму для нового профиля сайта.',
       'data-site-fleet-archive': 'Архивирует профиль сайта. Публичные файлы не удаляются без отдельного workflow.',
+      'data-domain-hosting-provider-select': 'Выбирает среду установки нового сайта. Для VPS открываются SSH, Ubuntu и SSL. Для Cloudflare открываются Pages, Worker, D1, R2 и KV.',
       'data-medgen-dry-run': 'Проверяет задачу MedGen без публикации и deploy.',
       'data-medgen-run': 'Запускает workflow MedGen после brief и подтверждения.',
       'data-agent-key-generate': 'Создает новый API-ключ для ИИ-агента. Raw key показывается только один раз.',
@@ -3675,11 +3816,23 @@
       'admin-domain-email': 'Публичный контактный email нового сайта.',
       'admin-domain-base-url': 'Canonical base URL нового сайта, обычно https://domain.',
       'admin-domain-default-locale': 'Root locale/GEO сайта. Сайт публикуется в корне домена без языковых папок.',
+      'admin-domain-deploy-provider': 'Главное правило установки: выберите VPS или Cloudflare. Админка переключит поля и запретит действия, не подходящие выбранной среде.',
+      'admin-domain-cf-pages-project': 'Cloudflare Pages project для нового статического сайта.',
+      'admin-domain-cf-worker': 'Cloudflare Worker, который будет обслуживать API/preview для CMS-режима без VPS runtime.',
+      'admin-domain-cf-d1': 'Cloudflare D1 база для служебных данных нового сайта.',
+      'admin-domain-cf-r2': 'Cloudflare R2 bucket для медиа и контент-пакетов нового сайта.',
+      'admin-domain-cf-kv': 'Cloudflare KV namespace для быстрых настроек и locks нового сайта.',
       'admin-site-fleet-select': 'Выбирает профиль сайта в разделе управления сайтами.',
       'admin-site-fleet-id': 'Стабильный site_id профиля. Используется в config/sites/*.json.',
       'admin-site-fleet-domain': 'Домен профиля сайта.',
       'admin-site-fleet-locale': 'Язык сайта в single-root модели.',
-      'admin-site-fleet-country': 'Страна/гео, под которую оптимизируется сайт.'
+      'admin-site-fleet-country': 'Страна/гео, под которую оптимизируется сайт.',
+      'admin-site-fleet-deploy-provider': 'Выбирает, куда публиковать статический сайт: на VPS через SSH или в Cloudflare Pages без VPS runtime.',
+      'admin-site-fleet-cf-pages-project': 'Имя Cloudflare Pages проекта, который будет принимать статическую сборку сайта.',
+      'admin-site-fleet-cf-worker': 'Имя Cloudflare Worker API для CMS-операций, если сайт работает в Cloudflare-first режиме.',
+      'admin-site-fleet-cf-d1': 'D1 база для списка сайтов, ролей, истории публикаций и служебных статусов.',
+      'admin-site-fleet-cf-r2': 'R2 bucket для медиа, JSON-пакетов контента, preview и release artifacts.',
+      'admin-site-fleet-cf-kv': 'KV namespace для короткоживущих сессий, locks и быстрых runtime-настроек.'
     };
 
     Object.keys(helps).forEach((id) => enhanceStaticLabelHelp(id, helps[id]));
@@ -4912,6 +5065,17 @@
 
     if (!requireActiveSiteContext(statusSetter, outputSetter)) {
       return siteContextError();
+    }
+
+    if (hostingProvider(activeSiteProfile()) !== 'static_vps') {
+      const result = {
+        ok: false,
+        issues: ['static_vps_required'],
+        human: 'Выбранный сайт работает в Cloudflare Pages. VPS build/deploy workflow для него заблокирован.'
+      };
+      outputSetter(result);
+      statusSetter('Deploy не запущен: для Cloudflare-профиля используйте Cloudflare publish flow.');
+      return result;
     }
 
     if (!githubToken()) {
@@ -6375,6 +6539,7 @@
 
     setDesignStatus('Готово к генерации');
     setDomainStatus('Готово к проверке доменного профиля');
+    syncDomainHostingFields();
 
     if (designState.booted) {
       return;
@@ -6398,6 +6563,7 @@
     const maintenanceBackupReset = siteLaunch ? siteLaunch.querySelector('[data-server-maintenance-backup-reset]') : null;
     const domainField = byId('admin-domain-name');
     const routeSeedField = byId('admin-domain-route-seed');
+    const domainHostingProvider = siteLaunch ? siteLaunch.querySelector('[data-domain-hosting-provider-select]') : null;
 
     generator.querySelectorAll('[data-design-field]').forEach((field) => {
       field.addEventListener('input', () => {
@@ -6493,7 +6659,8 @@
     if (deploy) {
       deploy.addEventListener('click', async () => {
         const result = await runDesignAction('design_deploy_package', designActionPayload('req-design-deploy-package', {
-          deploy_target: collectDomainDeployTargetPayload()
+          deploy_target: collectDomainDeployTargetPayload(),
+          deploy_profile: collectDomainDeployProfilePayload()
         }));
 
         setDesignStatus(result.ok ? 'Deploy package собран' : 'Deploy package не собран');
@@ -6533,6 +6700,11 @@
 
     if (routeSeedField) {
       routeSeedField.addEventListener('blur', fillDomainDefaults);
+    }
+
+    if (domainHostingProvider) {
+      domainHostingProvider.addEventListener('change', syncDomainHostingFields);
+      syncDomainHostingFields();
     }
   }
 
@@ -8081,13 +8253,14 @@
     const deployInput = document.querySelector('[data-github-deploy-after]');
     const ref = branchInput && branchInput.value ? branchInput.value.trim() : (config.branch || 'main');
     const deployAfter = deployInput ? deployInput.checked : true;
+    const deployStaticVps = deployAfter && !dryRun && hostingProvider(activeSiteProfile()) === 'static_vps';
     const body = {
       ref,
       inputs: {
         command,
         payload_json: JSON.stringify(payload || {}),
         dry_run: dryRun ? 'true' : 'false',
-        deploy_static_vps: deployAfter && !dryRun ? 'true' : 'false',
+        deploy_static_vps: deployStaticVps ? 'true' : 'false',
         target: 'production'
       }
     };
@@ -8119,7 +8292,7 @@
           data: {
             workflow,
             ref,
-            deploy_static_vps: deployAfter && !dryRun,
+            deploy_static_vps: deployStaticVps,
             actions_url: actionsUrl
           },
           warnings: ['GitHub принял команду асинхронно. Откройте Actions и дождитесь завершения workflow.']
