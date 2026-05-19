@@ -276,6 +276,163 @@
     return '';
   }
 
+  function monthStartDate() {
+    const now = new Date();
+
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  }
+
+  function monthStartIsoDate() {
+    return monthStartDate().toISOString().slice(0, 10);
+  }
+
+  function minutesBetween(startedAt, completedAt, rounded) {
+    const started = startedAt ? new Date(startedAt).getTime() : 0;
+    const completed = completedAt ? new Date(completedAt).getTime() : 0;
+
+    if (!started || !completed || completed <= started) {
+      return 0;
+    }
+
+    const minutes = (completed - started) / 60000;
+
+    return rounded ? Math.max(1, Math.ceil(minutes)) : minutes;
+  }
+
+  function runStartedAt(run) {
+    return run && (run.run_started_at || run.created_at) ? (run.run_started_at || run.created_at) : '';
+  }
+
+  function runCompletedAt(run) {
+    return run && (run.updated_at || run.completed_at) ? (run.updated_at || run.completed_at) : '';
+  }
+
+  function actionRunsPath(page) {
+    const config = readGithubConfig();
+    const owner = config && config.owner ? String(config.owner) : '';
+    const repo = config && config.repo ? String(config.repo) : '';
+    const query = [
+      'per_page=100',
+      'page=' + encodeURIComponent(String(page || 1)),
+      'created=%3E%3D' + encodeURIComponent(monthStartIsoDate())
+    ].join('&');
+
+    return '/repos/' + encodeURIComponent(owner) + '/' + encodeURIComponent(repo) + '/actions/runs?' + query;
+  }
+
+  function actionRunJobsPath(runId, page) {
+    const config = readGithubConfig();
+    const owner = config && config.owner ? String(config.owner) : '';
+    const repo = config && config.repo ? String(config.repo) : '';
+
+    return '/repos/' + encodeURIComponent(owner) + '/' + encodeURIComponent(repo) + '/actions/runs/' + encodeURIComponent(String(runId)) + '/jobs?per_page=100&page=' + encodeURIComponent(String(page || 1));
+  }
+
+  async function fetchCurrentMonthActionRuns() {
+    const runs = [];
+    let page = 1;
+
+    while (page <= 5) {
+      const result = await fetchGithubJson(actionRunsPath(page));
+
+      if (!result.response.ok || !result.payload || !Array.isArray(result.payload.workflow_runs)) {
+        return { ok: false, issue: 'runs_unavailable', runs };
+      }
+
+      runs.push(...result.payload.workflow_runs);
+
+      if (result.payload.workflow_runs.length < 100) {
+        break;
+      }
+
+      page += 1;
+    }
+
+    return { ok: true, runs };
+  }
+
+  async function fetchRunRoundedJobMinutes(run) {
+    if (!run || !run.id) {
+      return { ok: false, minutes: 0 };
+    }
+
+    let minutes = 0;
+    let page = 1;
+
+    while (page <= 3) {
+      const result = await fetchGithubJson(actionRunJobsPath(run.id, page));
+
+      if (!result.response.ok || !result.payload || !Array.isArray(result.payload.jobs)) {
+        return { ok: false, minutes: 0 };
+      }
+
+      result.payload.jobs.forEach((job) => {
+        minutes += minutesBetween(job.started_at, job.completed_at, true);
+      });
+
+      if (result.payload.jobs.length < 100) {
+        break;
+      }
+
+      page += 1;
+    }
+
+    return { ok: true, minutes };
+  }
+
+  async function mapWithConcurrency(items, limit, mapper) {
+    const results = new Array(items.length);
+    let cursor = 0;
+
+    async function worker() {
+      while (cursor < items.length) {
+        const index = cursor;
+        cursor += 1;
+        results[index] = await mapper(items[index], index);
+      }
+    }
+
+    const workers = [];
+    const count = Math.min(Math.max(1, limit), items.length);
+
+    for (let index = 0; index < count; index += 1) {
+      workers.push(worker());
+    }
+
+    await Promise.all(workers);
+
+    return results;
+  }
+
+  async function loadGithubActionsRepoUsage() {
+    const runsResult = await fetchCurrentMonthActionRuns();
+
+    if (!runsResult.ok) {
+      return 'Act repo n/a';
+    }
+
+    const runs = runsResult.runs.filter((run) => {
+      const started = runStartedAt(run);
+
+      return started && new Date(started) >= monthStartDate();
+    });
+
+    if (!runs.length) {
+      return 'Act repo 0м/0r';
+    }
+
+    const jobResults = await mapWithConcurrency(runs, 4, fetchRunRoundedJobMinutes);
+    const jobMinutes = jobResults.reduce((sum, result) => sum + (result && result.ok ? result.minutes : 0), 0);
+
+    if (jobMinutes > 0) {
+      return 'Act repo ' + formatMinutes(jobMinutes) + '/' + runs.length + 'r';
+    }
+
+    const runMinutes = runs.reduce((sum, run) => sum + minutesBetween(runStartedAt(run), runCompletedAt(run), true), 0);
+
+    return 'Act repo ~' + formatMinutes(runMinutes) + '/' + runs.length + 'r';
+  }
+
   async function fetchActionsBillingForUser(login) {
     if (!login) {
       return { ok: false, label: 'Act n/a' };
@@ -336,7 +493,7 @@
       return orgBilling.label;
     }
 
-    return 'Act billing n/a';
+    return loadGithubActionsRepoUsage();
   }
 
   function githubToken() {
