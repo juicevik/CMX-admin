@@ -589,6 +589,117 @@
     return String(base).replace(/\/+$/, '') + path;
   }
 
+  function cloudflareRuntimeEnabled() {
+    const config = readGithubConfig();
+
+    return config.cloudflare_runtime_enabled !== false;
+  }
+
+  function cloudflareApiBase() {
+    const config = readGithubConfig();
+    const base = config.cloudflare_api_base || 'https://api.workerwp.store';
+
+    return String(base).replace(/\/+$/, '');
+  }
+
+  function cloudflareApiUrl(path) {
+    return cloudflareApiBase() + path;
+  }
+
+  function cloudflareHeaders() {
+    return {
+      Accept: 'application/json',
+      Authorization: 'Bearer ' + githubToken(),
+      'Content-Type': 'application/json'
+    };
+  }
+
+  function cloudflareSiteIdFromProfile(profile) {
+    const source = profile && profile.site_id
+      ? profile.site_id
+      : profile && profile.domain
+        ? profile.domain
+        : profile && profile.base_url
+          ? profile.base_url
+          : adminState.activeSiteId;
+
+    return String(source || '')
+      .trim()
+      .toLowerCase()
+      .replace(/^https?:\/\//, '')
+      .replace(/^www\./, '')
+      .replace(/[^a-z0-9-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 80);
+  }
+
+  async function cloudflareApiRequest(path, options) {
+    if (!cloudflareRuntimeEnabled()) {
+      return { ok: false, issues: ['cloudflare_runtime_disabled'] };
+    }
+
+    if (!githubToken()) {
+      return { ok: false, issues: ['Token не подключен. Cloudflare Worker принимает тот же Bearer token, hash которого сохранен в Worker secret.'] };
+    }
+
+    try {
+      const response = await fetch(cloudflareApiUrl(path), Object.assign({
+        method: 'GET',
+        headers: cloudflareHeaders()
+      }, options || {}));
+      const payload = await readResponseJson(response);
+
+      return Object.assign({ ok: response.ok && payload.ok !== false, http_status: response.status }, payload);
+    } catch (error) {
+      return {
+        ok: false,
+        action: 'cloudflare_runtime_request',
+        issues: ['Cloudflare Worker API недоступен: ' + (error && error.message ? error.message : 'network error')]
+      };
+    }
+  }
+
+  async function cloudflareUpsertSiteProfile(profile) {
+    const siteId = cloudflareSiteIdFromProfile(profile);
+
+    if (!siteId) {
+      return { ok: false, issues: ['site_id_required'] };
+    }
+
+    return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId), {
+      method: 'PUT',
+      body: JSON.stringify({ profile: Object.assign({ site_id: siteId }, profile || {}) })
+    });
+  }
+
+  async function cloudflareStoreContentPackage(siteId, payload, packageType) {
+    return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/content-packages', {
+      method: 'POST',
+      body: JSON.stringify(Object.assign({}, payload || {}, {
+        site_id: siteId,
+        package_type: packageType || 'editorial',
+        request_id: payload && payload.request_id ? payload.request_id : 'req-' + Date.now()
+      }))
+    });
+  }
+
+  async function cloudflareCreatePreview(siteId, payload) {
+    return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/preview', {
+      method: 'POST',
+      body: JSON.stringify(Object.assign({}, payload || {}, {
+        site_id: siteId,
+        request_id: payload && payload.request_id ? payload.request_id : 'req-' + Date.now()
+      }))
+    });
+  }
+
+  async function cloudflarePublish(siteId, payload) {
+    return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/publish', {
+      method: 'POST',
+      body: JSON.stringify(Object.assign({}, payload || {}, { site_id: siteId }))
+    });
+  }
+
   function githubHeaders() {
     return {
       Accept: 'application/vnd.github+json',
@@ -2915,6 +3026,58 @@
     const contract = activeAuthContract(authContract);
     const path = siteRebrandEndpoint(contract, dryRun);
     const payload = collectDomainProfilePayload();
+    const provider = payload && payload.deploy_profile && payload.deploy_profile.provider === 'cloudflare_pages'
+      ? 'cloudflare_pages'
+      : 'static_vps';
+
+    if (isGithubMode() && provider === 'cloudflare_pages') {
+      if (!dryRun && !window.confirm('Сохранить Cloudflare Pages профиль в Worker/D1 без запуска GitHub Actions?')) {
+        setDomainStatus('Применение отменено');
+        return;
+      }
+
+      setDomainStatus(dryRun ? 'Проверяю Cloudflare профиль локально...' : 'Сохраняю Cloudflare профиль в Worker/D1...');
+      setStatusBusy('admin-domain-status', true);
+
+      try {
+        const siteId = cloudflareSiteIdFromProfile(payload);
+        const validation = {
+          ok: Boolean(siteId && payload.domain && payload.base_url && payload.deploy_profile.cloudflare && payload.deploy_profile.cloudflare.pages_project),
+          action: 'cloudflare_site_profile_validate',
+          dry_run: dryRun,
+          site_id: siteId,
+          issues: []
+        };
+
+        if (!siteId) {
+          validation.issues.push('site_id_required');
+        }
+        if (!payload.domain) {
+          validation.issues.push('domain_required');
+        }
+        if (!payload.base_url) {
+          validation.issues.push('base_url_required');
+        }
+        if (!payload.deploy_profile.cloudflare || !payload.deploy_profile.cloudflare.pages_project) {
+          validation.issues.push('cloudflare_pages_project_required');
+        }
+
+        if (dryRun || !validation.ok) {
+          setDomainOutput(validation);
+          setDomainStatus(validation.ok ? 'Cloudflare профиль валиден; Actions не нужны.' : 'Cloudflare профиль требует правки.');
+          return;
+        }
+
+        const result = await cloudflareUpsertSiteProfile(Object.assign({ status: 'configured' }, payload));
+
+        setDomainOutput(result);
+        setDomainStatus(result.ok ? 'Cloudflare профиль сохранен в Worker/D1. Редактура сайта теперь может идти без Actions.' : 'Cloudflare профиль не сохранен.');
+      } finally {
+        setStatusBusy('admin-domain-status', false);
+      }
+
+      return;
+    }
 
     if (isGithubMode()) {
       if (!dryRun && !window.confirm('Запустить GitHub workflow для нового доменного профиля и последующего статического деплоя?')) {
@@ -5068,14 +5231,18 @@
     }
 
     if (hostingProvider(activeSiteProfile()) !== 'static_vps') {
-      const result = {
-        ok: false,
-        issues: ['static_vps_required'],
-        human: 'Выбранный сайт работает в Cloudflare Pages. VPS build/deploy workflow для него заблокирован.'
-      };
-      outputSetter(result);
-      statusSetter('Deploy не запущен: для Cloudflare-профиля используйте Cloudflare publish flow.');
-      return result;
+      statusSetter('Готовлю Cloudflare preview без GitHub Actions...');
+      setStatusBusy('admin-draft-action-status', true);
+
+      try {
+        const result = await cloudflarePublishActiveSite();
+
+        outputSetter(result);
+        statusSetter(result.ok ? 'Cloudflare publish принят Worker runtime.' : 'Cloudflare publish не выполнен.');
+        return result;
+      } finally {
+        setStatusBusy('admin-draft-action-status', false);
+      }
     }
 
     if (!githubToken()) {
@@ -5095,6 +5262,65 @@
     statusSetter(result.ok ? 'Build/deploy workflow запущен. Это единственный Actions-этап после пачки сохранений.' : 'Build/deploy workflow не запущен.');
 
     return result;
+  }
+
+  async function cloudflarePublishActiveSite() {
+    const profile = activeSiteProfile();
+    const siteId = cloudflareSiteIdFromProfile(profile || {});
+
+    if (!siteId) {
+      return { ok: false, issues: ['site_context_required'] };
+    }
+
+    const deploy = profile && profile.deploy_profile ? profile.deploy_profile : {};
+    const cloudflare = deploy && deploy.cloudflare ? deploy.cloudflare : {};
+    const requestId = 'req-cloudflare-publish-' + Date.now();
+    const packagePayload = {
+      request_id: requestId,
+      site_id: siteId,
+      package_type: 'static_release_request',
+      summary: {
+        domain: profile.domain || '',
+        base_url: profile.base_url || '',
+        pages_project: cloudflare.pages_project || '',
+        provider: 'cloudflare_pages'
+      },
+      profile
+    };
+    const stored = await cloudflareStoreContentPackage(siteId, packagePayload, 'static_release_request');
+
+    if (!stored.ok) {
+      return stored;
+    }
+
+    const preview = await cloudflareCreatePreview(siteId, {
+      request_id: requestId,
+      package_r2_key: stored.r2_key,
+      summary: packagePayload.summary
+    });
+
+    if (!preview.ok) {
+      return preview;
+    }
+
+    const approved = window.prompt(
+      'Cloudflare preview создан. Для публикации вставьте approval token из ответа. Отмена оставит preview без публикации.',
+      preview.preview_token || ''
+    );
+
+    if (!approved) {
+      return Object.assign({}, preview, {
+        ok: true,
+        status: 'preview_ready',
+        warnings: ['Публикация остановлена до явного approval token. Actions не запускались.']
+      });
+    }
+
+    return cloudflarePublish(siteId, {
+      request_id: requestId,
+      approval_token: approved,
+      pages_project: cloudflare.pages_project || ''
+    });
   }
 
   async function submitEditorialMedia(contracts, authContract) {
