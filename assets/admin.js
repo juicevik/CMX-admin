@@ -700,6 +700,249 @@
     });
   }
 
+  function cloudflareRuntimeForActiveSite() {
+    return isGithubMode()
+      && cloudflareRuntimeEnabled()
+      && hostingProvider(activeSiteProfile()) === 'cloudflare_pages';
+  }
+
+  function cloudflareContentPackageSummary(payload, targetPath, packageType) {
+    const fields = payload && payload.fields ? payload.fields : {};
+
+    return {
+      package_type: packageType || 'editorial',
+      mode: payload && payload.mode ? payload.mode : '',
+      content_type: payload && payload.content_type ? payload.content_type : '',
+      slug: payload && payload.slug ? payload.slug : '',
+      route: payload && payload.route ? payload.route : '',
+      target_path: targetPath || '',
+      title: fields.title || fields.author_name || '',
+      active_site_id: adminState.activeSiteId
+    };
+  }
+
+  function pageContractByResource(contracts, resource) {
+    return contracts && Array.isArray(contracts.pages)
+      ? contracts.pages.find((page) => page && page.resource === resource) || null
+      : null;
+  }
+
+  async function cloudflareSaveEditorialPackage(payload, contracts, packageType) {
+    const profile = activeSiteProfile();
+    const siteId = cloudflareSiteIdFromProfile(profile || {});
+    const targetPath = pageTargetPathForPayload(payload, contracts);
+    const validation = clientValidateEditorialPayload(payload, contracts);
+
+    if (!siteId) {
+      return { ok: false, issues: ['site_context_required'] };
+    }
+
+    if (!validation.ok) {
+      return validation;
+    }
+
+    let page = null;
+
+    if (payload.mode === 'edit') {
+      const existing = pageContractByResource(contracts, targetPath);
+      const existingPayload = editorialPageData(existing);
+      page = existingPayload && typeof existingPayload === 'object'
+        ? JSON.parse(JSON.stringify(existingPayload))
+        : null;
+
+      if (!page) {
+        return {
+          ok: false,
+          action: 'cloudflare_editorial_package',
+          issues: ['Existing page payload is not available in admin manifest. Rebuild admin bootstrap before editing this page.']
+        };
+      }
+
+      applyFieldsToPage(page, payload);
+    } else {
+      page = generatedPageFromPayload(payload, contracts);
+    }
+
+    const requestIdValue = requestId('req-cf-editorial');
+    const packagePayload = {
+      request_id: requestIdValue,
+      site_id: siteId,
+      package_type: packageType || 'editorial',
+      summary: cloudflareContentPackageSummary(payload, targetPath, packageType),
+      target_path: targetPath,
+      payload,
+      page
+    };
+    const stored = await cloudflareStoreContentPackage(siteId, packagePayload, packageType || 'editorial');
+
+    if (!stored.ok) {
+      return stored;
+    }
+
+    const preview = await cloudflareCreatePreview(siteId, {
+      request_id: requestIdValue,
+      package_r2_key: stored.r2_key || stored.storage_key || '',
+      summary: packagePayload.summary
+    });
+
+    if (!preview.ok) {
+      return preview;
+    }
+
+    const approved = window.prompt(
+      'Cloudflare preview создан. Для публикации вставьте approval token из ответа. Отмена сохранит пакет как preview без публикации.',
+      preview.preview_token || ''
+    );
+
+    if (!approved) {
+      return Object.assign({}, preview, {
+        ok: true,
+        status: 'preview_ready',
+        package: stored,
+        target_path: targetPath,
+        warnings: ['Пакет сохранен в Cloudflare runtime; публикация ждет approval token. GitHub Actions не запускались.']
+      });
+    }
+
+    const published = await cloudflarePublish(siteId, {
+      request_id: requestIdValue,
+      approval_token: approved,
+      target_path: targetPath,
+      package_storage_key: stored.storage_key || stored.r2_key || ''
+    });
+
+    return Object.assign({}, published, {
+      package: stored,
+      preview,
+      target_path: targetPath
+    });
+  }
+
+  async function cloudflareArchivePagePackage(relativePath) {
+    const profile = activeSiteProfile();
+    const siteId = cloudflareSiteIdFromProfile(profile || {});
+
+    if (!siteId) {
+      return { ok: false, issues: ['site_context_required'] };
+    }
+
+    if (!isSafeContentPagePath(relativePath)) {
+      return { ok: false, issues: ['Archive target must be a safe content/pages/*.json path.'] };
+    }
+
+    const requestIdValue = requestId('req-cf-archive');
+    const packagePayload = {
+      request_id: requestIdValue,
+      site_id: siteId,
+      package_type: 'archive',
+      summary: {
+        target_path: relativePath,
+        mode: 'archive',
+        active_site_id: adminState.activeSiteId
+      },
+      target_path: relativePath,
+      archive: {
+        status: 'archived',
+        robots: 'noindex,nofollow'
+      }
+    };
+    const stored = await cloudflareStoreContentPackage(siteId, packagePayload, 'archive');
+
+    if (!stored.ok) {
+      return stored;
+    }
+
+    const preview = await cloudflareCreatePreview(siteId, {
+      request_id: requestIdValue,
+      package_r2_key: stored.r2_key || stored.storage_key || '',
+      summary: packagePayload.summary
+    });
+
+    if (!preview.ok) {
+      return preview;
+    }
+
+    const approved = window.prompt(
+      'Cloudflare preview удаления создан. Для архивации вставьте approval token из ответа.',
+      preview.preview_token || ''
+    );
+
+    if (!approved) {
+      return Object.assign({}, preview, {
+        ok: true,
+        status: 'preview_ready',
+        package: stored,
+        warnings: ['Архивация остановлена до approval token. GitHub Actions не запускались.']
+      });
+    }
+
+    return cloudflarePublish(siteId, {
+      request_id: requestIdValue,
+      approval_token: approved,
+      target_path: relativePath,
+      package_storage_key: stored.storage_key || stored.r2_key || ''
+    });
+  }
+
+  async function cloudflareUploadMediaFile(file, contentType, alt, area) {
+    const profile = activeSiteProfile();
+    const siteId = cloudflareSiteIdFromProfile(profile || {});
+    const allowed = ['image/webp', 'image/jpeg', 'image/png', 'image/svg+xml'];
+
+    if (!siteId) {
+      return { ok: false, issues: ['site_context_required'] };
+    }
+
+    if (!allowed.includes(file.type)) {
+      return {
+        ok: false,
+        errors: [{
+          field: 'primary_image',
+          code: 'unsupported_media_type',
+          human: 'Upload webp, jpg, png, or svg media only.'
+        }]
+      };
+    }
+
+    if (file.size > 3 * 1024 * 1024) {
+      return {
+        ok: false,
+        errors: [{
+          field: 'primary_image',
+          code: 'media_too_large',
+          human: 'Media file must be 3 MB or smaller.'
+        }]
+      };
+    }
+
+    const filename = safeMediaFilename(file, area || contentType || 'media');
+    const result = await cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/media', {
+      method: 'POST',
+      body: JSON.stringify({
+        site_id: siteId,
+        filename,
+        content_type: file.type,
+        contents_base64: await fileToBase64(file),
+        alt: alt || ''
+      })
+    });
+
+    if (result.ok) {
+      const path = result.public_path || (result.r2_key ? '/assets/media/cloudflare/' + filename : '');
+      result.data = {
+        media: {
+          path,
+          alt: alt || '',
+          storage: result.storage || '',
+          storage_key: result.storage_key || result.r2_key || '',
+          digest: result.digest || ''
+        }
+      };
+    }
+
+    return result;
+  }
+
   function githubHeaders() {
     return {
       Accept: 'application/vnd.github+json',
@@ -5363,6 +5606,23 @@
         alt
       };
 
+      if (cloudflareRuntimeForActiveSite()) {
+        const result = await cloudflareUploadMediaFile(file, contentType, alt, 'editorial');
+
+        if (result && result.ok && result.data && result.data.media) {
+          editorialState.media.primary_image = result.data.media;
+
+          if (byId('admin-editorial-media-path') && result.data.media.path) {
+            byId('admin-editorial-media-path').value = result.data.media.path;
+          }
+        }
+
+        setEditorialOutput(result);
+        setEditorialStatus(result.ok ? 'Медиа сохранено в Cloudflare R2/KV без GitHub Actions.' : 'Cloudflare media upload вернул ошибку.');
+
+        return result;
+      }
+
       if (isGithubMode()) {
         const result = await githubUploadMediaFile(file, contentType, alt, 'editorial');
 
@@ -5437,6 +5697,23 @@
       return siteContextError();
     }
 
+    if (cloudflareRuntimeForActiveSite()) {
+      const payload = currentEditorialPayload(contracts);
+
+      editorialState.lastQueuePayload = payload;
+      setEditorialStatus('Сохраняю пакет в Cloudflare Worker и создаю preview...');
+      setEditorialOutput(payload);
+
+      const result = await cloudflareSaveEditorialPackage(payload, contracts, 'editorial');
+
+      setEditorialOutput(result);
+      setEditorialStatus(result.ok
+        ? (result.status === 'preview_ready' ? 'Preview сохранен в Cloudflare. Публикация ждет approval token.' : 'Пакет принят Cloudflare runtime без GitHub Actions.')
+        : 'Cloudflare runtime вернул ошибку.');
+
+      return result;
+    }
+
     if (isGithubMode()) {
       const payload = currentEditorialPayload(contracts);
 
@@ -5503,6 +5780,17 @@
 
     setEditorialStatus('Запрос archive endpoint...');
     setEditorialOutput(payload);
+
+    if (cloudflareRuntimeForActiveSite()) {
+      const result = await cloudflareArchivePagePackage(selectedResource);
+
+      setEditorialOutput(result);
+      setEditorialStatus(result.ok
+        ? (result.status === 'preview_ready' ? 'Preview архивации сохранен в Cloudflare; требуется approval token.' : 'Архивация принята Cloudflare runtime без Actions.')
+        : 'Cloudflare archive вернул ошибку.');
+
+      return result;
+    }
 
     if (isGithubMode()) {
       const result = await githubArchivePageContent(selectedResource);
@@ -6052,6 +6340,23 @@
         alt
       };
 
+      if (cloudflareRuntimeForActiveSite()) {
+        const result = await cloudflareUploadMediaFile(file, 'product', alt, 'product');
+
+        if (result && result.ok && result.data && result.data.media) {
+          productCardState.media.primary_image = result.data.media;
+
+          if (byId('admin-product-card-media-path') && result.data.media.path) {
+            byId('admin-product-card-media-path').value = result.data.media.path;
+          }
+        }
+
+        setProductCardOutput(result);
+        setProductCardStatus(result.ok ? 'Медиа карточки сохранено в Cloudflare R2/KV без GitHub Actions.' : 'Cloudflare media upload карточки вернул ошибку.');
+
+        return result;
+      }
+
       if (isGithubMode()) {
         const result = await githubUploadMediaFile(file, 'product', alt, 'product');
 
@@ -6097,6 +6402,23 @@
   async function submitProductCardPublish(contracts, authContract) {
     if (!requireActiveSiteContext(setProductCardStatus, setProductCardOutput)) {
       return siteContextError();
+    }
+
+    if (cloudflareRuntimeForActiveSite()) {
+      const payload = currentProductCardPayload(contracts);
+
+      productCardState.lastQueuePayload = payload;
+      setProductCardStatus('Сохраняю карточку в Cloudflare Worker и создаю preview...');
+      setProductCardOutput(payload);
+
+      const result = await cloudflareSaveEditorialPackage(payload, contracts, 'product_card');
+
+      setProductCardOutput(result);
+      setProductCardStatus(result.ok
+        ? (result.status === 'preview_ready' ? 'Preview карточки сохранен в Cloudflare. Публикация ждет approval token.' : 'Карточка принята Cloudflare runtime без GitHub Actions.')
+        : 'Cloudflare runtime вернул ошибку карточки.');
+
+      return result;
     }
 
     if (isGithubMode()) {
