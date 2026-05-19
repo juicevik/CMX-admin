@@ -286,6 +286,52 @@
     return monthStartDate().toISOString().slice(0, 10);
   }
 
+  function parseGithubRepository(repository) {
+    const parts = String(repository || '').split('/');
+
+    return {
+      owner: parts[0] || '',
+      repo: parts[1] || ''
+    };
+  }
+
+  function githubActionUsageRepositories() {
+    const config = readGithubConfig();
+    const configured = Array.isArray(config.actions_usage_repositories)
+      ? config.actions_usage_repositories
+      : [];
+    const fallbackRepository = config && config.repository ? String(config.repository) : '';
+    const repositories = configured.length
+      ? configured
+      : [{ repository: fallbackRepository, label: fallbackRepository, billable: true, quota_minutes: 2000 }];
+    const seen = new Set();
+
+    return repositories
+      .map((item) => {
+        const repository = String(item && item.repository ? item.repository : '').trim();
+        const parsed = parseGithubRepository(repository);
+
+        return {
+          repository,
+          owner: parsed.owner,
+          repo: parsed.repo,
+          label: String(item && item.label ? item.label : (parsed.repo || repository)),
+          billable: !(item && item.billable === false),
+          quotaMinutes: Number(item && item.quota_minutes ? item.quota_minutes : 0)
+        };
+      })
+      .filter((item) => {
+        const key = item.repository.toLowerCase();
+
+        if (!item.owner || !item.repo || seen.has(key)) {
+          return false;
+        }
+
+        seen.add(key);
+        return true;
+      });
+  }
+
   function minutesBetween(startedAt, completedAt, rounded) {
     const started = startedAt ? new Date(startedAt).getTime() : 0;
     const completed = completedAt ? new Date(completedAt).getTime() : 0;
@@ -307,10 +353,9 @@
     return run && (run.updated_at || run.completed_at) ? (run.updated_at || run.completed_at) : '';
   }
 
-  function actionRunsPath(page) {
-    const config = readGithubConfig();
-    const owner = config && config.owner ? String(config.owner) : '';
-    const repo = config && config.repo ? String(config.repo) : '';
+  function actionRunsPath(repository, page) {
+    const owner = repository && repository.owner ? String(repository.owner) : '';
+    const repo = repository && repository.repo ? String(repository.repo) : '';
     const query = [
       'per_page=100',
       'page=' + encodeURIComponent(String(page || 1)),
@@ -320,20 +365,19 @@
     return '/repos/' + encodeURIComponent(owner) + '/' + encodeURIComponent(repo) + '/actions/runs?' + query;
   }
 
-  function actionRunJobsPath(runId, page) {
-    const config = readGithubConfig();
-    const owner = config && config.owner ? String(config.owner) : '';
-    const repo = config && config.repo ? String(config.repo) : '';
+  function actionRunJobsPath(repository, runId, page) {
+    const owner = repository && repository.owner ? String(repository.owner) : '';
+    const repo = repository && repository.repo ? String(repository.repo) : '';
 
     return '/repos/' + encodeURIComponent(owner) + '/' + encodeURIComponent(repo) + '/actions/runs/' + encodeURIComponent(String(runId)) + '/jobs?per_page=100&page=' + encodeURIComponent(String(page || 1));
   }
 
-  async function fetchCurrentMonthActionRuns() {
+  async function fetchCurrentMonthActionRuns(repository) {
     const runs = [];
     let page = 1;
 
     while (page <= 5) {
-      const result = await fetchGithubJson(actionRunsPath(page));
+      const result = await fetchGithubJson(actionRunsPath(repository, page));
 
       if (!result.response.ok || !result.payload || !Array.isArray(result.payload.workflow_runs)) {
         return { ok: false, issue: 'runs_unavailable', runs };
@@ -351,7 +395,7 @@
     return { ok: true, runs };
   }
 
-  async function fetchRunRoundedJobMinutes(run) {
+  async function fetchRunRoundedJobMinutes(repository, run) {
     if (!run || !run.id) {
       return { ok: false, minutes: 0 };
     }
@@ -360,7 +404,7 @@
     let page = 1;
 
     while (page <= 3) {
-      const result = await fetchGithubJson(actionRunJobsPath(run.id, page));
+      const result = await fetchGithubJson(actionRunJobsPath(repository, run.id, page));
 
       if (!result.response.ok || !result.payload || !Array.isArray(result.payload.jobs)) {
         return { ok: false, minutes: 0 };
@@ -404,11 +448,11 @@
     return results;
   }
 
-  async function loadGithubActionsRepoUsage() {
-    const runsResult = await fetchCurrentMonthActionRuns();
+  async function loadGithubActionsRepoUsage(repository) {
+    const runsResult = await fetchCurrentMonthActionRuns(repository);
 
     if (!runsResult.ok) {
-      return 'Act repo n/a';
+      return { ok: false, minutes: 0, runs: 0, billable: repository.billable, quotaMinutes: repository.quotaMinutes };
     }
 
     const runs = runsResult.runs.filter((run) => {
@@ -418,19 +462,55 @@
     });
 
     if (!runs.length) {
-      return 'Act repo 0м/0r';
+      return { ok: true, minutes: 0, runs: 0, billable: repository.billable, quotaMinutes: repository.quotaMinutes };
     }
 
-    const jobResults = await mapWithConcurrency(runs, 4, fetchRunRoundedJobMinutes);
+    const jobResults = await mapWithConcurrency(runs, 4, (run) => fetchRunRoundedJobMinutes(repository, run));
     const jobMinutes = jobResults.reduce((sum, result) => sum + (result && result.ok ? result.minutes : 0), 0);
 
     if (jobMinutes > 0) {
-      return 'Act repo ' + formatMinutes(jobMinutes) + '/' + runs.length + 'r';
+      return { ok: true, minutes: jobMinutes, runs: runs.length, billable: repository.billable, quotaMinutes: repository.quotaMinutes };
     }
 
     const runMinutes = runs.reduce((sum, run) => sum + minutesBetween(runStartedAt(run), runCompletedAt(run), true), 0);
 
-    return 'Act repo ~' + formatMinutes(runMinutes) + '/' + runs.length + 'r';
+    return { ok: true, minutes: runMinutes, runs: runs.length, billable: repository.billable, quotaMinutes: repository.quotaMinutes, approximate: true };
+  }
+
+  function actionsUsageLabel(metrics) {
+    const billableMinutes = metrics.reduce((sum, item) => sum + (item.billable ? item.minutes : 0), 0);
+    const publicMinutes = metrics.reduce((sum, item) => sum + (!item.billable ? item.minutes : 0), 0);
+    const totalRuns = metrics.reduce((sum, item) => sum + item.runs, 0);
+    const quota = metrics.reduce((sum, item) => sum + (item.billable ? item.quotaMinutes : 0), 0) || 2000;
+    const prefix = metrics.some((item) => item.approximate) ? '~' : '';
+    const parts = ['Act ' + prefix + Math.round(billableMinutes) + '/' + quota];
+
+    if (publicMinutes > 0) {
+      parts.push('pub ' + Math.round(publicMinutes));
+    }
+
+    if (totalRuns > 0) {
+      parts.push(totalRuns + 'r');
+    }
+
+    return parts.join(' · ');
+  }
+
+  async function loadGithubActionsConfiguredUsage() {
+    const repositories = githubActionUsageRepositories();
+
+    if (!repositories.length) {
+      return 'Act repo n/a';
+    }
+
+    const metrics = await mapWithConcurrency(repositories, 2, loadGithubActionsRepoUsage);
+    const available = metrics.filter((item) => item && item.ok);
+
+    if (!available.length) {
+      return 'Act repo n/a';
+    }
+
+    return actionsUsageLabel(available);
   }
 
   async function fetchActionsBillingForUser(login) {
@@ -493,7 +573,7 @@
       return orgBilling.label;
     }
 
-    return loadGithubActionsRepoUsage();
+    return loadGithubActionsConfiguredUsage();
   }
 
   function githubToken() {
