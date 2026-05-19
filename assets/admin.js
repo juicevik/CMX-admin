@@ -3384,8 +3384,47 @@
     help.setAttribute('aria-label', text);
     help.dataset.tooltip = text;
     help.textContent = '❔';
+    help.addEventListener('mouseenter', () => alignHelpBubble(help));
+    help.addEventListener('focus', () => alignHelpBubble(help));
 
     return help;
+  }
+
+  function tooltipBoundary(help) {
+    return help.closest('.admin-section, .admin-spoiler, .editorial-panel, .domain-design, .design-favicon-tool, .metric, .page-row, .module-card, .workflow-card, .workflow-page, .site-fleet-card, .admin-page-card, .admin-root') || document.documentElement;
+  }
+
+  function alignHelpBubble(help) {
+    if (!help || typeof help.getBoundingClientRect !== 'function') {
+      return;
+    }
+
+    const margin = 14;
+    const minWidth = 180;
+    const preferredWidth = 352;
+    const viewportWidth = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+    const boundaryRect = tooltipBoundary(help).getBoundingClientRect();
+    const helpRect = help.getBoundingClientRect();
+    const boundaryLeft = Math.max(margin, boundaryRect.left + margin);
+    const boundaryRight = Math.min(viewportWidth - margin, boundaryRect.right - margin);
+    const availableWidth = Math.max(minWidth, boundaryRight - boundaryLeft);
+    const width = Math.max(minWidth, Math.min(preferredWidth, availableWidth, viewportWidth - margin * 2));
+    const centerLeft = helpRect.left + helpRect.width / 2 - width / 2;
+    const centerRight = centerLeft + width;
+
+    help.style.setProperty('--tooltip-max-width', width + 'px');
+
+    if (centerLeft < boundaryLeft) {
+      help.dataset.tooltipAlign = 'start';
+      return;
+    }
+
+    if (centerRight > boundaryRight) {
+      help.dataset.tooltipAlign = 'end';
+      return;
+    }
+
+    help.dataset.tooltipAlign = 'center';
   }
 
   function insertHelpBubble(container, afterNode, text, type) {
