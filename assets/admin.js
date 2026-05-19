@@ -3388,6 +3388,30 @@
     return help;
   }
 
+  function insertHelpBubble(container, afterNode, text, type) {
+    if (!container || !text) {
+      return;
+    }
+
+    const marker = type || 'static';
+
+    if (container.querySelector('.field-help[data-admin-help="' + marker + '"]')) {
+      return;
+    }
+
+    const help = createHelpBubble(text);
+
+    help.dataset.adminHelp = marker;
+    help.classList.add('field-help--' + marker);
+
+    if (afterNode && afterNode.parentNode === container && typeof afterNode.after === 'function') {
+      afterNode.after(help);
+      return;
+    }
+
+    container.appendChild(help);
+  }
+
   function createFieldLabel(labelText, helpText) {
     const wrapper = document.createElement('span');
     const title = document.createElement('strong');
@@ -3426,8 +3450,154 @@
     label.insertBefore(createFieldLabel(title || controlId, helpText), control);
   }
 
+  function enhanceSectionSummaryHelp() {
+    const helps = {
+      'site-workflow': 'Главный сценарий CMS. Здесь сначала выбирается активный домен. Пока домен не выбран, редактура, карточки, MedGen, дизайн и deploy заблокированы.',
+      'main-workspace': 'Рабочая область выбранного сайта. Внутри находятся редактура страниц и карточки товаров для активного домена.',
+      editorial: 'Редактирует существующие страницы или создает новые страницы сайта. Матрица показывает только поля, которые относятся к выбранному типу или странице.',
+      'product-cards': 'Создает и редактирует карточки товаров. Без выбранного домена поля заблокированы, чтобы случайно не изменить другой сайт.',
+      'role-permissions': 'Админский раздел для пользователей, ролей и API-ключей ИИ-агента. Редактору этот раздел не показывается.',
+      'site-launch': 'Отдельный поток для нового домена: профиль сайта, GEO, дизайн, сервер, SSL и первый статический deploy.',
+      medgen: 'Раздел для задач внешнего генератора контента. MedGen не пишет сайт напрямую: сначала создается задача, затем preview и только потом сохранение.',
+      sites: 'Список профилей сайтов. Здесь хранится домен, GEO, locale, deploy profile и имена secret_refs без вывода реальных секретов.',
+      design: 'Настройки визуального профиля, логотипа и favicon выбранного сайта. Изменения применяются только к активному домену.',
+      technical: 'Технические инструменты выбранного сайта: контент, legacy payload composer, модули и системные сведения.',
+      content: 'Инвентарь страниц. Здесь видно route, тип страницы, статус и быстрый переход в редактор выбранной страницы.',
+      workflow: 'Legacy payload composer для ручного контроля старых draft-команд. Для обычной редактуры лучше использовать редактор публикаций.',
+      modules: 'Справочник модулей страниц: где модуль может использоваться и какие SEO hooks он дает.',
+      system: 'Системная информация админки: auth endpoints, runtime роли, audit и диагностические данные.'
+    };
+
+    document.querySelectorAll('[data-section-panel]').forEach((panel) => {
+      const name = panel.getAttribute('data-section-panel') || '';
+      const summary = Array.from(panel.children).find((child) => child.tagName && child.tagName.toLowerCase() === 'summary');
+      const label = summary ? summary.querySelector('span') : null;
+
+      if (!summary || !helps[name]) {
+        return;
+      }
+
+      insertHelpBubble(summary, label, helps[name], 'section');
+    });
+
+    document.querySelectorAll('.editorial-panel > summary, .domain-design > summary, .design-favicon-tool > summary, .workflow-page > summary').forEach((summary) => {
+      const text = String(summary.textContent || '').trim();
+      const lower = text.toLowerCase();
+      let help = '';
+
+      if (lower.includes('матрица')) {
+        help = 'Матрица определяет, какие строки и блоки будут доступны для заполнения или публикации на выбранной странице.';
+      } else if (lower.includes('выбран')) {
+        help = 'В этом блоке появляются поля, которые отмечены в матрице. Изменения попадут в payload сохранения.';
+      } else if (lower.includes('медиа')) {
+        help = 'Здесь загружается или привязывается изображение. Для публикации нужен корректный путь и понятный alt-текст.';
+      } else if (lower.includes('связ')) {
+        help = 'Связи управляют тем, где новая или измененная страница будет появляться: главная, каталог, связанные блоки, подвал.';
+      } else if (lower.includes('очеред') || lower.includes('публикац')) {
+        help = 'Здесь выполняется проверка, сохранение в GitHub и отдельный запуск сборки/deploy после подтверждения.';
+      } else if (lower.includes('удал')) {
+        help = 'Архивирует выбранную страницу или карточку. Это рискованное действие, его нужно применять только к выбранному домену.';
+      } else if (lower.includes('шапка') || lower.includes('подвал')) {
+        help = 'Редактирует навигацию сайта: пункты меню в шапке и ссылки в подвале.';
+      } else if (lower.includes('домен')) {
+        help = 'Поля доменного профиля задают новый сайт: домен, GEO, root locale, route prefixes и SEO-основу.';
+      } else if (lower.includes('favicon')) {
+        help = 'Позволяет заменить favicon выбранного сайта без полной генерации нового дизайна.';
+      } else {
+        help = 'Этот спойлер разворачивает связанный рабочий блок. Наведи курсор на поля внутри, чтобы увидеть точные подсказки.';
+      }
+
+      insertHelpBubble(summary, summary.firstElementChild, help, 'subsection');
+    });
+  }
+
+  function enhanceButtonHelp() {
+    const helps = {
+      'data-site-navigation-validate': 'Проверяет формат меню шапки и подвала без сохранения.',
+      'data-site-navigation-apply': 'Сохраняет меню выбранного сайта через GitHub Contents API.',
+      'data-editorial-media-save': 'Сохраняет изображение страницы или карточки в безопасный media path.',
+      'data-editorial-queue-validate': 'Проверяет payload страницы: обязательные поля, route, SEO и безопасный target_path.',
+      'data-editorial-publish': 'Сохраняет страницу в GitHub без автоматического запуска Actions.',
+      'data-github-static-deploy': 'Запускает отдельную сборку и deploy статического сайта для выбранного домена.',
+      'data-editorial-archive-submit': 'Архивирует выбранную страницу или карточку после проверки прав и target_path.',
+      'data-product-card-media-save': 'Сохраняет фото товара для карточки и страницы продукта.',
+      'data-product-card-validate': 'Проверяет карточку товара перед сохранением.',
+      'data-product-card-publish': 'Сохраняет карточку товара в GitHub без автоматического deploy.',
+      'data-design-generate': 'Генерирует черновой визуальный профиль по seed для выбранного сайта.',
+      'data-design-save-draft': 'Сохраняет значения дизайн-полей как черновик.',
+      'data-design-preview': 'Создает preview дизайна до применения.',
+      'data-design-apply': 'Применяет выбранный дизайн к текущему сайту после проверки.',
+      'data-design-deploy': 'Готовит deploy package с текущим дизайном.',
+      'data-design-upload-run': 'Загружает logo/favicon assets в выбранный дизайн.',
+      'data-design-favicon-apply': 'Меняет favicon выбранного сайта без полной генерации дизайна.',
+      'data-design-favicon-generate': 'Генерирует favicon по seed и готовит его к применению.',
+      'data-site-fleet-dry-run': 'Проверяет профиль сайта без записи.',
+      'data-site-fleet-save': 'Сохраняет профиль сайта: домен, GEO, deploy и secret_refs.',
+      'data-site-fleet-new': 'Очищает форму для нового профиля сайта.',
+      'data-site-fleet-archive': 'Архивирует профиль сайта. Публичные файлы не удаляются без отдельного workflow.',
+      'data-medgen-dry-run': 'Проверяет задачу MedGen без публикации и deploy.',
+      'data-medgen-run': 'Запускает workflow MedGen после brief и подтверждения.',
+      'data-agent-key-generate': 'Создает новый API-ключ для ИИ-агента. Raw key показывается только один раз.',
+      'data-agent-key-save': 'Сохраняет hash/fingerprint и права agent key, не сохраняя raw key.',
+      'data-admin-user-save': 'Сохраняет GitHub-пользователя, роль и права редактора.',
+      'data-admin-user-new': 'Очищает форму для новой учетной записи.',
+      'data-admin-role-save': 'Сохраняет матрицу прав роли editor.',
+      'data-draft-run-dry-run': 'Запускает dry-run legacy draft action без изменения файлов.',
+      'data-draft-run-execute': 'Выполняет legacy draft action. Использовать только после dry-run.',
+      'data-copy-target': 'Копирует команду или payload в буфер обмена.',
+      'data-draft-status-refresh': 'Обновляет статусы draft/preview для страниц.',
+      'data-audit-refresh': 'Обновляет последние события audit log.'
+    };
+
+    Object.entries(helps).forEach(([attribute, helpText]) => {
+      document.querySelectorAll('button[' + attribute + ']').forEach((button) => {
+        insertHelpBubble(button.parentElement, button, helpText, attribute);
+      });
+    });
+  }
+
+  function enhanceMetricHelp() {
+    const helps = {
+      'Статус': 'Показывает, загружена ли админка и сколько страниц, опубликованных записей и модулей видит текущая сборка.',
+      'Страниц': 'Общее количество page JSON, доступных админке в текущем контексте.',
+      'Опубл.': 'Количество страниц со статусом published.',
+      'Модулей': 'Количество зарегистрированных модулей, из которых собираются страницы.',
+      'Версия': 'Версия сборщика админки и схемы панели.',
+      'GitHub лимиты': 'Показывает REST API rate limit и Actions usage, чтобы не тратить GitHub Actions на обычную редактуру.'
+    };
+
+    document.querySelectorAll('.metric').forEach((metric) => {
+      const labelNode = metric.querySelector('span, h1');
+      const label = labelNode ? String(labelNode.textContent || '').trim() : '';
+
+      if (!helps[label]) {
+        return;
+      }
+
+      insertHelpBubble(metric, labelNode, helps[label], 'metric');
+    });
+  }
+
+  function enhanceCardHelp() {
+    const cardHelp = [
+      ['.page-row', 'Карточка страницы показывает route, тип, статус и модули. Ссылка «Редактировать» переносит выбранную страницу в редактор публикаций.'],
+      ['.module-card', 'Карточка модуля описывает, где модуль можно использовать и какие данные/SEO hooks он добавляет в страницу.'],
+      ['.workflow-card', 'Legacy-команда draft workflow. Используй только если обычная редактура через Contents API не подходит.'],
+      ['.workflow-page', 'Legacy-сводка по странице: source JSON, draft и preview paths. Для обычной правки используй «Редактура сайта».'],
+      ['.site-fleet-card', 'Профиль сайта: домен, GEO, root locale, deploy target и secret_refs. Выбор профиля определяет, с каким доменом работает CMS.'],
+      ['.admin-page-card', 'Быстрый переход к странице/разделу админки. Сам по себе не меняет сайт.']
+    ];
+
+    cardHelp.forEach(([selector, helpText]) => {
+      document.querySelectorAll(selector).forEach((card) => {
+        insertHelpBubble(card, card.firstElementChild, helpText, 'card');
+      });
+    });
+  }
+
   function enhanceStaticAdminHelp() {
     const helps = {
+      'admin-active-site': 'Главный обязательный выбор. Пока домен не выбран, CMS не даст редактировать страницы, карточки, дизайн, MedGen или deploy.',
       'admin-editorial-mode': 'Выбирает действие: создать новую страницу или отредактировать уже опубликованную.',
       'admin-editorial-existing-page': 'Выбирает готовую страницу сайта. После выбора матрица показывает поля именно этой страницы.',
       'admin-editorial-content-type': 'Выбирает тип шаблона: товар, статья, обзор, автор, категория или техническая страница.',
@@ -3444,10 +3614,40 @@
       'admin-product-card-media-path': 'Указывает путь к изображению товара, если картинка уже лежит на сайте.',
       'admin-product-card-media-alt': 'Меняет alt-текст фотографии товара.',
       'admin-site-header-nav': 'Редактирует верхнее меню сайта: группы ссылок, подписи пунктов и пути, по которым кликает пользователь.',
-      'admin-site-footer-nav': 'Редактирует подвал сайта: колонки, подписи ссылок и пути внизу каждой страницы.'
+      'admin-site-footer-nav': 'Редактирует подвал сайта: колонки, подписи ссылок и пути внизу каждой страницы.',
+      'admin-page-search': 'Фильтрует список страниц по названию, route или типу.',
+      'admin-page-type-filter': 'Показывает только страницы выбранного типа.',
+      'admin-page-editor-title': 'Меняет title страницы в legacy SEO editor.',
+      'admin-page-editor-route': 'Меняет публичный route. Используй осторожно: route влияет на canonical, sitemap и внутренние ссылки.',
+      'admin-page-editor-seo-title': 'Меняет SEO title для поискового сниппета.',
+      'admin-page-editor-seo-description': 'Меняет meta description для поискового сниппета.',
+      'admin-page-editor-seo-robots': 'Управляет индексацией страницы: index/follow или noindex.',
+      'admin-payload-page': 'Выбирает страницу для legacy payload composer.',
+      'admin-payload-action': 'Выбирает legacy действие для выбранной страницы.',
+      'admin-module-editor-module': 'Выбирает модуль для просмотра или ручной правки props JSON.',
+      'admin-module-editor-props': 'Показывает JSON props выбранного модуля. Ошибка здесь может сломать рендер страницы.',
+      'admin-create-kind': 'Выбирает тип новой страницы в legacy create flow.',
+      'admin-design-seed': 'Seed задает направление генерации визуального профиля.',
+      'admin-design-brand': 'Меняет название бренда в дизайн-профиле.',
+      'admin-design-logo': 'Загружает логотип для выбранного сайта.',
+      'admin-design-favicon': 'Загружает favicon для выбранного сайта.',
+      'admin-domain-name': 'Домен нового сайта без https и без www. Используется как seed для SEO, route и обфускации.',
+      'admin-domain-brand': 'Название бренда нового сайта.',
+      'admin-domain-email': 'Публичный контактный email нового сайта.',
+      'admin-domain-base-url': 'Canonical base URL нового сайта, обычно https://domain.',
+      'admin-domain-default-locale': 'Root locale/GEO сайта. Сайт публикуется в корне домена без языковых папок.',
+      'admin-site-fleet-select': 'Выбирает профиль сайта в разделе управления сайтами.',
+      'admin-site-fleet-id': 'Стабильный site_id профиля. Используется в config/sites/*.json.',
+      'admin-site-fleet-domain': 'Домен профиля сайта.',
+      'admin-site-fleet-locale': 'Язык сайта в single-root модели.',
+      'admin-site-fleet-country': 'Страна/гео, под которую оптимизируется сайт.'
     };
 
     Object.keys(helps).forEach((id) => enhanceStaticLabelHelp(id, helps[id]));
+    enhanceSectionSummaryHelp();
+    enhanceButtonHelp();
+    enhanceMetricHelp();
+    enhanceCardHelp();
   }
 
   function renderEditorialMatrix(contracts) {

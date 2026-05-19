@@ -836,7 +836,7 @@ code {
   align-content: start;
   min-height: 5.75rem;
   padding: 0.72rem 0.78rem 0.66rem 2.75rem;
-  overflow: hidden;
+  overflow: visible;
   border-color: color-mix(in srgb, var(--admin-accent) 22%, var(--admin-border));
   background:
     radial-gradient(circle at 14% 18%, rgba(0, 139, 149, 0.12), transparent 5rem),
@@ -927,6 +927,48 @@ code {
   font-size: 0.58rem;
   font-weight: 750;
   line-height: 1.25;
+}
+
+.admin-spoiler > summary .field-help,
+.editorial-panel > summary .field-help,
+.domain-design > summary .field-help,
+.design-favicon-tool > summary .field-help,
+.workflow-page > summary .field-help {
+  margin-inline-start: -0.15rem;
+}
+
+.metric .field-help--metric {
+  position: absolute;
+  top: 0.52rem;
+  right: 0.52rem;
+  z-index: 5;
+  width: 1.12rem;
+  height: 1.12rem;
+  font-size: 0.66rem;
+}
+
+button + .field-help,
+.button-link + .field-help {
+  align-self: center;
+}
+
+.field-help--card {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 3;
+  width: 1.22rem;
+  height: 1.22rem;
+  font-size: 0.68rem;
+}
+
+.page-row,
+.module-card,
+.workflow-card,
+.workflow-page,
+.site-fleet-card,
+.admin-page-card {
+  position: relative;
 }
 
 .metric--status strong {
