@@ -12,6 +12,7 @@
     agentKeys: [],
     activeSiteId: ''
   };
+  const siteContextRequiredPanels = ['main-workspace', 'editorial', 'product-cards', 'medgen', 'design', 'technical', 'content', 'workflow', 'modules', 'system'];
   const draftActionState = {
     dryRun: null
   };
@@ -755,11 +756,59 @@
     const profiles = siteProfiles();
     const normalized = String(siteId || '').trim();
 
-    return profiles.find((profile) => String(profile.site_id || '') === normalized) || profiles[0] || null;
+    if (!normalized) {
+      return null;
+    }
+
+    return profiles.find((profile) => String(profile.site_id || '') === normalized) || null;
   }
 
   function activeSiteProfile() {
     return siteProfileById(adminState.activeSiteId);
+  }
+
+  function siteContextError() {
+    return {
+      ok: false,
+      action: 'site_context_required',
+      issues: ['Сначала выберите домен в блоке "Рабочий сценарий CMS". После этого редактура, публикация, MedGen, дизайн и deploy будут работать относительно выбранного сайта.']
+    };
+  }
+
+  function focusActiveSiteSelector() {
+    const select = document.querySelector('[data-active-site-select]');
+    const panel = byId('admin-site-workflow');
+
+    if (panel && panel.tagName.toLowerCase() === 'details') {
+      panel.open = true;
+    }
+
+    if (select) {
+      select.focus();
+      select.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+
+  function requireActiveSiteContext(statusSetter, outputSetter) {
+    const profile = activeSiteProfile();
+
+    if (profile) {
+      return profile;
+    }
+
+    const result = siteContextError();
+
+    if (typeof outputSetter === 'function') {
+      outputSetter(result);
+    }
+
+    if (typeof statusSetter === 'function') {
+      statusSetter('Сначала выберите домен для работы.');
+    }
+
+    focusActiveSiteSelector();
+
+    return null;
   }
 
   function siteRouteNamespace(profile, type) {
@@ -835,6 +884,73 @@
     renderSiteFleet(adminState.manifest || {});
   }
 
+  function setSiteContextActionState(panel, locked) {
+    panel.querySelectorAll('button').forEach((button) => {
+      if (button.closest('[data-site-context-exempt]')) {
+        return;
+      }
+
+      if (locked) {
+        if (!button.disabled) {
+          button.dataset.siteContextDisabled = 'true';
+        }
+        button.disabled = true;
+        return;
+      }
+
+      if (button.dataset.siteContextDisabled === 'true') {
+        button.disabled = false;
+        delete button.dataset.siteContextDisabled;
+      }
+    });
+  }
+
+  function ensureSiteContextNotice(panel, message) {
+    let notice = panel.querySelector('[data-site-context-lock]');
+
+    if (!notice) {
+      notice = document.createElement('p');
+      notice.className = 'site-context-lock';
+      notice.setAttribute('data-site-context-lock', '');
+      notice.setAttribute('role', 'note');
+
+      const summary = panel.querySelector('summary');
+      panel.insertBefore(notice, summary && summary.nextSibling ? summary.nextSibling : panel.firstChild);
+    }
+
+    notice.textContent = message;
+    notice.hidden = false;
+  }
+
+  function syncSiteContextGate(profile, profiles) {
+    const locked = !profile;
+    const message = profiles && profiles.length > 0
+      ? 'Сначала выберите домен в первом блоке. Этот раздел начнет работать только после выбора активного сайта.'
+      : 'Сначала создайте профиль сайта. Без домена этот раздел не может менять контент, дизайн или deploy.';
+
+    document.body.dataset.activeSiteId = profile ? String(profile.site_id || '') : '';
+    document.body.dataset.siteContext = locked ? 'missing' : 'ready';
+
+    siteContextRequiredPanels.forEach((name) => {
+      const panel = document.querySelector('[data-section-panel="' + name + '"]');
+
+      if (!panel) {
+        return;
+      }
+
+      panel.dataset.siteContext = locked ? 'missing' : 'ready';
+      panel.setAttribute('aria-disabled', locked ? 'true' : 'false');
+      setSiteContextActionState(panel, locked);
+
+      const notice = panel.querySelector('[data-site-context-lock]');
+      if (locked) {
+        ensureSiteContextNotice(panel, message);
+      } else if (notice) {
+        notice.hidden = true;
+      }
+    });
+  }
+
   function siteProfileOptions(manifest) {
     const profiles = siteProfiles(manifest);
 
@@ -848,15 +964,11 @@
     const profiles = siteProfiles(manifest);
     const select = document.querySelector('[data-active-site-select]');
     const status = document.querySelector('[data-active-site-status]');
-    const profile = activeSiteProfile() || profiles[0] || null;
-
-    if (!adminState.activeSiteId && profile) {
-      adminState.activeSiteId = String(profile.site_id || '');
-    }
+    const profile = activeSiteProfile();
 
     if (select) {
-      fillSelect(select, siteProfileOptions(manifest));
-      select.value = adminState.activeSiteId;
+      fillSelect(select, [{ value: '', label: 'Выберите домен' }].concat(siteProfileOptions(manifest)));
+      select.value = profile ? adminState.activeSiteId : '';
 
       if (select.dataset.activeSiteBound !== 'true') {
         select.dataset.activeSiteBound = 'true';
@@ -880,11 +992,14 @@
     if (status) {
       status.value = profile
         ? 'Активный сайт: ' + String(profile.domain || profile.site_id || 'site')
-        : 'Нет профилей сайтов. Создайте профиль перед генерацией и редактурой.';
+        : (profiles.length > 0
+          ? 'Выберите домен. До выбора редактура, публикация, MedGen, дизайн и deploy заблокированы.'
+          : 'Нет профилей сайтов. Создайте профиль перед генерацией и редактурой.');
       status.textContent = status.value;
     }
 
     syncSiteScopedDefaults(profile);
+    syncSiteContextGate(profile, profiles);
   }
 
   function renderSiteFleet(manifest) {
@@ -893,10 +1008,10 @@
     const status = document.querySelector('[data-site-fleet-status]');
     const cards = document.querySelector('[data-site-fleet-cards]');
     const secrets = document.querySelector('[data-site-fleet-secret-refs]');
-    const profile = activeSiteProfile() || profiles[0] || null;
+    const profile = activeSiteProfile();
 
     if (select) {
-      fillSelect(select, siteProfileOptions(manifest));
+      fillSelect(select, [{ value: '', label: 'Выберите домен' }].concat(siteProfileOptions(manifest)));
       select.value = profile ? String(profile.site_id || '') : '';
 
       if (select.dataset.siteFleetBound !== 'true') {
@@ -2505,6 +2620,10 @@
       return;
     }
 
+    if (!requireActiveSiteContext(setMedGenStatus, setMedGenOutput)) {
+      return;
+    }
+
     if (!dryRun && !window.confirm('Запустить MedGen workflow? Генерация может занять до 30 минут.')) {
       setMedGenStatus('MedGen запуск отменен');
       return;
@@ -3556,6 +3675,10 @@
   }
 
   async function submitSiteNavigation(dryRun) {
+    if (!requireActiveSiteContext(setSiteNavigationStatus, setSiteNavigationOutput)) {
+      return siteContextError();
+    }
+
     const payload = siteNavigationPayload();
 
     setSiteNavigationOutput(payload);
@@ -3696,6 +3819,10 @@
   }
 
   async function submitEditorialQueue(contracts, authContract) {
+    if (!requireActiveSiteContext(setEditorialStatus, setEditorialOutput)) {
+      return siteContextError();
+    }
+
     const payload = currentEditorialPayload(contracts);
 
     editorialState.lastQueuePayload = payload;
@@ -3720,6 +3847,10 @@
   }
 
   async function submitEditorialValidate(contracts, authContract) {
+    if (!requireActiveSiteContext(setEditorialStatus, setEditorialOutput)) {
+      return siteContextError();
+    }
+
     const payload = currentEditorialPayload(contracts);
 
     setEditorialStatus('Проверка очереди публикации...');
@@ -4531,6 +4662,10 @@
   async function githubDispatchStaticDeploy(statusSetter, outputSetter) {
     const config = readGithubConfig();
 
+    if (!requireActiveSiteContext(statusSetter, outputSetter)) {
+      return siteContextError();
+    }
+
     if (!githubToken()) {
       const result = { ok: false, issues: ['GitHub token не подключен.'] };
       outputSetter(result);
@@ -4551,6 +4686,10 @@
   }
 
   async function submitEditorialMedia(contracts, authContract) {
+    if (!requireActiveSiteContext(setEditorialStatus, setEditorialOutput)) {
+      return siteContextError();
+    }
+
     const fileInput = document.querySelector('[data-editorial-media-file]');
     const file = fileInput && fileInput.files && fileInput.files.length > 0 ? fileInput.files[0] : null;
     const config = editorialConfig(contracts);
@@ -4629,6 +4768,10 @@
   }
 
   async function submitEditorialDeploy(contracts, authContract, payloadOverride) {
+    if (!requireActiveSiteContext(setEditorialStatus, setEditorialOutput)) {
+      return siteContextError();
+    }
+
     const payload = payloadOverride || editorialState.lastQueuePayload || currentEditorialPayload(contracts);
 
     setEditorialStatus('Запрос deploy endpoint...');
@@ -4652,6 +4795,10 @@
   }
 
   async function submitEditorialPublish(contracts, authContract) {
+    if (!requireActiveSiteContext(setEditorialStatus, setEditorialOutput)) {
+      return siteContextError();
+    }
+
     if (isGithubMode()) {
       const payload = currentEditorialPayload(contracts);
 
@@ -4694,6 +4841,10 @@
   }
 
   async function submitEditorialArchive(authContract) {
+    if (!requireActiveSiteContext(setEditorialStatus, setEditorialOutput)) {
+      return siteContextError();
+    }
+
     const deleteSelect = document.querySelector('[data-editorial-delete-page]');
     const selectedResource = deleteSelect ? deleteSelect.value : '';
 
@@ -5162,6 +5313,10 @@
   }
 
   async function submitProductCardQueue(contracts, authContract) {
+    if (!requireActiveSiteContext(setProductCardStatus, setProductCardOutput)) {
+      return siteContextError();
+    }
+
     const payload = currentProductCardPayload(contracts);
 
     productCardState.lastQueuePayload = payload;
@@ -5186,6 +5341,10 @@
   }
 
   async function submitProductCardValidate(contracts, authContract) {
+    if (!requireActiveSiteContext(setProductCardStatus, setProductCardOutput)) {
+      return siteContextError();
+    }
+
     const payload = currentProductCardPayload(contracts);
 
     setProductCardStatus('Проверка карточки товара...');
@@ -5218,6 +5377,10 @@
   }
 
   async function submitProductCardMedia(contracts, authContract) {
+    if (!requireActiveSiteContext(setProductCardStatus, setProductCardOutput)) {
+      return siteContextError();
+    }
+
     const fileInput = document.querySelector('[data-product-card-media-file]');
     const file = fileInput && fileInput.files && fileInput.files.length > 0 ? fileInput.files[0] : null;
     const alt = byId('admin-product-card-media-alt') ? byId('admin-product-card-media-alt').value.trim() : '';
@@ -5294,6 +5457,10 @@
   }
 
   async function submitProductCardPublish(contracts, authContract) {
+    if (!requireActiveSiteContext(setProductCardStatus, setProductCardOutput)) {
+      return siteContextError();
+    }
+
     if (isGithubMode()) {
       const payload = currentProductCardPayload(contracts);
 
@@ -5690,6 +5857,10 @@
   async function runDesignAction(name, payload) {
     const path = designEndpoint(name);
     const authContract = readAuthContract() || {};
+
+    if (!requireActiveSiteContext(setDesignStatus, setDesignOutput)) {
+      return siteContextError();
+    }
 
     if (!path) {
       setDesignStatus('Endpoint дизайна недоступен');
@@ -7493,8 +7664,8 @@
     adminState.actionContracts = contracts;
     adminState.authContract = authContract;
     adminState.agentKeys = Array.isArray(manifest.agent_keys) ? manifest.agent_keys : [];
-    if (!adminState.activeSiteId && Array.isArray(manifest.sites) && manifest.sites[0]) {
-      adminState.activeSiteId = String(manifest.sites[0].site_id || '');
+    if (adminState.activeSiteId && !siteProfileById(adminState.activeSiteId)) {
+      adminState.activeSiteId = '';
     }
     setGatedVisible(true);
     renderAdminMetrics(manifest);
