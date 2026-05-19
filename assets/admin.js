@@ -13,6 +13,7 @@
     activeSiteId: ''
   };
   const siteContextRequiredPanels = ['main-workspace', 'editorial', 'product-cards', 'medgen', 'design', 'technical', 'content', 'workflow', 'modules', 'system'];
+  const siteContextControlSelector = 'button, input, select, textarea';
   const draftActionState = {
     dryRun: null
   };
@@ -884,23 +885,31 @@
     renderSiteFleet(adminState.manifest || {});
   }
 
+  function isSiteContextControlExempt(control) {
+    return Boolean(
+      control.closest('[data-site-context-exempt]')
+      || control.closest('[data-site-workflow-panel]')
+      || control.matches('[data-active-site-select]')
+    );
+  }
+
   function setSiteContextActionState(panel, locked) {
-    panel.querySelectorAll('button').forEach((button) => {
-      if (button.closest('[data-site-context-exempt]')) {
+    panel.querySelectorAll(siteContextControlSelector).forEach((control) => {
+      if (isSiteContextControlExempt(control)) {
         return;
       }
 
       if (locked) {
-        if (!button.disabled) {
-          button.dataset.siteContextDisabled = 'true';
+        if (!control.disabled) {
+          control.dataset.siteContextDisabled = 'true';
         }
-        button.disabled = true;
+        control.disabled = true;
         return;
       }
 
-      if (button.dataset.siteContextDisabled === 'true') {
-        button.disabled = false;
-        delete button.dataset.siteContextDisabled;
+      if (control.dataset.siteContextDisabled === 'true') {
+        control.disabled = false;
+        delete control.dataset.siteContextDisabled;
       }
     });
   }
@@ -7693,6 +7702,7 @@
     bootComposer();
     wireEditorialWidget(adminState.actionContracts, adminState.authContract);
     wireProductCardEditor(adminState.actionContracts, adminState.authContract);
+    syncSiteContextGate(activeSiteProfile(), siteProfiles(manifest));
     wireSiteChromeEditor();
     if (!isGithubMode()) {
       loadAuditHistory(authContract);
