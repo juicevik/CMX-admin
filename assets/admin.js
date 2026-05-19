@@ -3322,7 +3322,7 @@
     const payload = siteNavigationPayload();
 
     setSiteNavigationOutput(payload);
-    setSiteNavigationStatus(dryRun ? 'Проверяю шапку и подвал...' : 'Сохраняю шапку и подвал через GitHub Actions...');
+    setSiteNavigationStatus(dryRun ? 'Проверяю шапку и подвал...' : 'Сохраняю шапку и подвал через GitHub Contents API...');
 
     if (!isGithubMode()) {
       const result = { ok: false, issues: ['Редактирование шапки и подвала доступно через CMS-admin_v2 на GitHub Pages.'] };
@@ -3332,10 +3332,10 @@
       return result;
     }
 
-    const result = await githubDispatchCommand('site_navigation', payload, dryRun);
+    const result = await githubSaveNavigation(payload, dryRun);
 
     setSiteNavigationOutput(result);
-    setSiteNavigationStatus(result.ok ? (dryRun ? 'Проверка меню отправлена.' : 'Сохранение меню отправлено в Actions.') : 'Меню не отправлено.');
+    setSiteNavigationStatus(result.ok ? (dryRun ? 'Проверка меню выполнена локально.' : 'Меню сохранено в GitHub без запуска Actions.') : 'Меню не сохранено.');
 
     return result;
   }
@@ -3489,10 +3489,10 @@
     setEditorialOutput(payload);
 
     if (isGithubMode()) {
-      const result = await githubDispatchCommand('publish', payload, true);
+      const result = clientValidateEditorialPayload(payload, contracts);
 
       setEditorialOutput(result);
-      setEditorialStatus(result.ok ? 'GitHub dry-run отправлен в Actions.' : 'GitHub dry-run не запущен.');
+      setEditorialStatus(result.ok ? 'Проверка выполнена локально. Actions не запускались.' : 'Проверка нашла ошибки.');
 
       return result;
     }
@@ -3612,7 +3612,7 @@
           'Content-Type': 'application/json'
         }),
         body: JSON.stringify({
-          message: 'Upload CMS media: ' + relativePath,
+          message: 'Upload CMS media: ' + relativePath + ' [skip ci]',
           content: base64,
           branch: ref
         })
@@ -3666,6 +3666,653 @@
     }
   }
 
+  function githubBranch() {
+    const config = readGithubConfig();
+    const branchInput = document.querySelector('[data-github-branch]');
+
+    return branchInput && branchInput.value ? branchInput.value.trim() : (config.branch || 'main');
+  }
+
+  function githubRepository() {
+    const config = readGithubConfig();
+
+    return config.repository || '';
+  }
+
+  function utf8ToBase64(value) {
+    const bytes = new TextEncoder().encode(String(value || ''));
+    let binary = '';
+
+    bytes.forEach((byte) => {
+      binary += String.fromCharCode(byte);
+    });
+
+    return btoa(binary);
+  }
+
+  function base64ToUtf8(value) {
+    const binary = atob(String(value || '').replace(/\s+/g, ''));
+    const bytes = new Uint8Array(binary.length);
+
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+
+    return new TextDecoder().decode(bytes);
+  }
+
+  function isSafeRepositoryPath(path, prefix) {
+    const normalized = String(path || '').trim();
+
+    return normalized !== ''
+      && normalized.startsWith(prefix)
+      && !normalized.includes('..')
+      && !normalized.includes('//')
+      && /^[a-zA-Z0-9_./-]+$/.test(normalized);
+  }
+
+  function isSafeContentPagePath(path) {
+    return isSafeRepositoryPath(path, 'content/pages/') && String(path || '').endsWith('.json');
+  }
+
+  async function githubReadTextFile(relativePath) {
+    const repository = githubRepository();
+    const ref = githubBranch();
+
+    if (!repository) {
+      return { ok: false, issues: ['GitHub repository config is missing.'] };
+    }
+
+    const response = await fetch(githubApiUrl('/repos/' + repository + '/contents/' + githubContentsPath(relativePath) + '?ref=' + encodeURIComponent(ref)), {
+      method: 'GET',
+      headers: githubHeaders()
+    });
+    const payload = await readResponseJson(response);
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        http_status: response.status,
+        issues: [payload.message || 'GitHub Contents read failed.'],
+        data: payload
+      };
+    }
+
+    return {
+      ok: true,
+      sha: payload.sha || '',
+      content: base64ToUtf8(payload.content || ''),
+      data: payload
+    };
+  }
+
+  async function githubWriteTextFile(relativePath, content, message, sha) {
+    const repository = githubRepository();
+    const ref = githubBranch();
+    const body = {
+      message: String(message || 'Save CMS edit') + ' [skip ci]',
+      content: utf8ToBase64(content),
+      branch: ref
+    };
+
+    if (sha) {
+      body.sha = sha;
+    }
+
+    if (!repository) {
+      return { ok: false, issues: ['GitHub repository config is missing.'] };
+    }
+
+    if (!githubToken()) {
+      return { ok: false, issues: ['GitHub token не подключен.'] };
+    }
+
+    try {
+      const response = await fetch(githubApiUrl('/repos/' + repository + '/contents/' + githubContentsPath(relativePath)), {
+        method: 'PUT',
+        headers: Object.assign({}, githubHeaders(), {
+          'Content-Type': 'application/json'
+        }),
+        body: JSON.stringify(body)
+      });
+      const payload = await readResponseJson(response);
+
+      if (!response.ok) {
+        return {
+          ok: false,
+          http_status: response.status,
+          errors: [{
+            field: 'github_contents',
+            code: 'save_failed',
+            human: payload.message || 'GitHub Contents save failed.',
+            ai_hint: 'Check token Contents write permission, branch protection, and the target path.'
+          }],
+          data: payload
+        };
+      }
+
+      return {
+        ok: true,
+        action: 'github_contents_save',
+        data: {
+          path: relativePath,
+          commit: payload && payload.commit ? payload.commit.sha : '',
+          html_url: payload && payload.content ? payload.content.html_url : ''
+        },
+        written_paths: [relativePath],
+        warnings: ['Сохранено прямым GitHub Contents commit с [skip ci]; Actions не запускались. Для публикации статического сайта нажмите «Собрать и деплой».']
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        action: 'github_contents_save',
+        issues: ['GitHub Contents save failed: ' + (error && error.message ? error.message : 'network error')]
+      };
+    }
+  }
+
+  async function githubSaveJsonFile(relativePath, payload, message, existingSha) {
+    return githubWriteTextFile(
+      relativePath,
+      JSON.stringify(payload, null, 2) + '\n',
+      message,
+      existingSha
+    );
+  }
+
+  function pageTargetPathForPayload(payload, contracts) {
+    if (payload && payload.mode === 'edit' && payload.target_path) {
+      return String(payload.target_path);
+    }
+
+    const config = editorialConfig(contracts);
+    const preset = editorialPreset(config, payload && payload.content_type ? payload.content_type : 'technical');
+    const slug = payload && payload.slug ? payload.slug : 'page';
+
+    return replacePlaceholders(preset.resource_template || 'content/pages/technical/{{slug}}.json', { '{{slug}}': slug });
+  }
+
+  function parsePipeRows(value, keys) {
+    return String(value || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
+      const parts = line.split('|').map((part) => part.trim());
+      const row = {};
+
+      keys.forEach((key, index) => {
+        row[key] = parts[index] || '';
+      });
+
+      return row;
+    }).filter((row) => Object.values(row).some((part) => String(part || '').trim() !== ''));
+  }
+
+  function parseSimpleList(value) {
+    return Array.isArray(value)
+      ? value.map((item) => String(item || '').trim()).filter(Boolean)
+      : String(value || '').split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+  }
+
+  function parseContentBlocks(value) {
+    const blocks = parsePipeRows(value, ['heading', 'body']);
+
+    if (blocks.length > 0) {
+      return blocks.map((block) => [block.heading, block.body].filter(Boolean).join('\n')).filter(Boolean);
+    }
+
+    return String(value || '').split(/\n{2,}/).map((item) => item.trim()).filter(Boolean);
+  }
+
+  function parseFaqItems(value) {
+    return parsePipeRows(value, ['question', 'answer']).filter((item) => item.question && item.answer);
+  }
+
+  function safePublicImage(path, fallback) {
+    const value = String(path || '').trim();
+
+    return value.startsWith('/assets/media/') ? value : fallback;
+  }
+
+  function seoForPage(title, description, route, image, type) {
+    const safeTitle = title || 'Untitled page';
+    const safeDescription = description || 'Editorial page created in CMX admin.';
+    const safeImage = safePublicImage(image, '/assets/media/seo/default-share.webp');
+
+    return {
+      title: safeTitle,
+      description: safeDescription,
+      canonical: route,
+      robots: 'index,follow',
+      open_graph: {
+        title: safeTitle,
+        description: safeDescription,
+        type: type || 'website',
+        url: route,
+        image: safeImage
+      },
+      twitter: {
+        card: 'summary_large_image',
+        title: safeTitle,
+        description: safeDescription,
+        image: safeImage
+      }
+    };
+  }
+
+  function breadcrumbsForRoute(route, title, contentType) {
+    const crumbs = [{ title: 'Home', route: '/' }];
+
+    if (contentType === 'product') {
+      crumbs.push({ title: 'Popular products', route: '/bady/' });
+    } else if (contentType === 'author') {
+      crumbs.push({ title: 'Experts', route: '/experts/' });
+    } else if (contentType === 'article') {
+      crumbs.push({ title: 'Guides', route: '/guides/' });
+    } else if (contentType === 'review') {
+      crumbs.push({ title: 'Reviews', route: '/obzory/' });
+    }
+
+    crumbs.push({ title: title || 'Untitled page', route });
+
+    return crumbs;
+  }
+
+  function ensureModule(page, type, fallback) {
+    page.modules = Array.isArray(page.modules) ? page.modules : [];
+    let module = page.modules.find((item) => item && item.type === type);
+
+    if (!module) {
+      module = fallback;
+      page.modules.push(module);
+    }
+
+    module.props = module.props && typeof module.props === 'object' ? module.props : {};
+
+    return module;
+  }
+
+  function generatedPageFromPayload(payload, contracts) {
+    const config = editorialConfig(contracts);
+    const preset = editorialPreset(config, payload.content_type || 'technical');
+    const fields = payload.fields || {};
+    const title = String(fields.title || fields.author_name || payload.slug || 'Untitled page').trim();
+    const description = String(fields.description || fields.bio || fields.verdict || 'Editorial page created in CMX admin.').trim();
+    const image = payload.media && payload.media.primary_image ? payload.media.primary_image.path : '';
+    const route = payload.route || replacePlaceholders(preset.route_template || '/{{slug}}/', { '{{slug}}': payload.slug || 'page' });
+    const id = payload.slug || normalizeSlug(title);
+    const pageType = preset.page_type || (payload.content_type === 'product' ? 'supplement' : 'technical');
+    const schemaOrg = Array.isArray(preset.schema_org) ? preset.schema_org : ['WebPage', 'BreadcrumbList'];
+    const page = {
+      id,
+      route,
+      page_type: pageType,
+      status: 'published',
+      locale: 'bg-BG',
+      locale_folder: '',
+      title,
+      updated_at: new Date().toISOString(),
+      seo: seoForPage(title, description, route, image, payload.content_type === 'author' ? 'profile' : payload.content_type === 'product' ? 'article' : 'website'),
+      breadcrumbs: breadcrumbsForRoute(route, title, payload.content_type),
+      modules: [],
+      cache: {
+        strategy: 'static',
+        ttl_seconds: 86400
+      },
+      schema_org: schemaOrg
+    };
+
+    applyFieldsToPage(page, payload);
+
+    return page;
+  }
+
+  function setEditablePagePath(page, fieldKey, value) {
+    if (!/^page\.(?:updated_at|seo\.(?:title|description|canonical|robots|open_graph\.(?:title|description|type|url|image)|twitter\.(?:card|title|description|image))|modules\.[0-9]+\.props\.[a-zA-Z0-9_]+(?:\.(?:[a-zA-Z0-9_]+|[0-9]+))*)$/.test(fieldKey)) {
+      return false;
+    }
+
+    const segments = fieldKey.slice('page.'.length).split('.');
+    let target = page;
+
+    for (let index = 0; index < segments.length - 1; index += 1) {
+      const segment = /^\d+$/.test(segments[index]) ? Number(segments[index]) : segments[index];
+
+      if (!target || typeof target !== 'object' || !(segment in target)) {
+        return false;
+      }
+
+      target = target[segment];
+    }
+
+    const last = segments[segments.length - 1];
+    const key = /^\d+$/.test(last) ? Number(last) : last;
+    const current = target[key];
+
+    if (Array.isArray(current)) {
+      try {
+        const decoded = JSON.parse(String(value || '').trim());
+        target[key] = Array.isArray(decoded) ? decoded : current;
+      } catch (error) {
+        target[key] = parseSimpleList(value);
+      }
+    } else if (typeof current === 'number') {
+      target[key] = Number.isFinite(Number(value)) ? Number(value) : current;
+    } else if (typeof current === 'boolean') {
+      target[key] = ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+    } else {
+      target[key] = String(value || '').trim();
+    }
+
+    return true;
+  }
+
+  function applyProductFields(page, fields, payload) {
+    const image = payload.media && payload.media.primary_image ? payload.media.primary_image.path : '';
+    const alt = payload.media && payload.media.primary_image ? payload.media.primary_image.alt : '';
+    const module = ensureModule(page, 'supplement_profile', {
+      id: (payload.slug || page.id || 'product') + '-profile',
+      type: 'supplement_profile',
+      slot: 'main',
+      props: {}
+    });
+    const props = module.props;
+
+    props.name = fields.title || page.title || props.name || '';
+    props.brand = fields.brand || props.brand || '';
+    props.summary = fields.description || props.summary || page.seo.description || '';
+    props.rating = fields.rating !== undefined && fields.rating !== '' ? Number(fields.rating) : props.rating;
+    props.price = fields.price_range || props.price || '';
+    props.seller_label = fields.buy_button || props.seller_label || 'Buy';
+    props.seller_url = fields.buy_url || props.seller_url || '#';
+    props.review_cta_label = fields.review_cta_label || props.review_cta_label || '';
+    props.review_route = fields.review_route || props.review_route || '';
+    props.review_title = fields.review_title || props.review_title || '';
+    props.review_preview = fields.review_preview || props.review_preview || '';
+    props.review_link_label = fields.review_link_label || props.review_link_label || 'View review';
+    props.compare_label = fields.compare_label || props.compare_label || 'Compare';
+    props.compare_route = fields.compare_route || props.compare_route || '/comparisons/';
+    props.category_label = fields.category_label || props.category_label || '';
+    props.reviewer = fields.reviewer || props.reviewer || '';
+    props.reviewer_role = fields.reviewer_role || props.reviewer_role || '';
+    props.reviewer_route = fields.reviewer_route || props.reviewer_route || '';
+    props.reviewer_image = fields.reviewer_image || props.reviewer_image || '';
+    props.reviewer_social_links = fields.reviewer_social_links ? parsePipeRows(fields.reviewer_social_links, ['label', 'url']) : (props.reviewer_social_links || []);
+    props.updated = fields.updated || props.updated || '';
+    props.verdict = fields.verdict || props.verdict || '';
+    props.availability = fields.availability || props.availability || 'available';
+    props.facts = fields.facts ? parsePipeRows(fields.facts, ['label', 'value']) : (props.facts || []);
+    props.ingredients = fields.ingredients ? parsePipeRows(fields.ingredients, ['name', 'amount', 'note']) : (props.ingredients || []);
+    props.safety_notes = fields.safety_notes ? parseSimpleList(fields.safety_notes) : (props.safety_notes || []);
+    props.pros = fields.pros ? parseSimpleList(fields.pros) : (props.pros || []);
+    props.cons = fields.cons ? parseSimpleList(fields.cons) : (props.cons || []);
+    props.sources = fields.sources ? parsePipeRows(fields.sources, ['title', 'url', 'note']) : (props.sources || []);
+    props.disclaimer = fields.disclaimer || props.disclaimer || '';
+    props.affiliate_note = fields.affiliate_note || props.affiliate_note || '';
+    props.author_name = fields.author_name || props.author_name || '';
+    props.author_role = fields.author_role || props.author_role || '';
+    props.author_route = fields.author_route || props.author_route || '';
+    props.author_image = fields.author_image || props.author_image || '';
+    props.author_social_links = fields.author_social_links ? parsePipeRows(fields.author_social_links, ['label', 'url']) : (props.author_social_links || []);
+
+    if (image) {
+      props.image = image;
+      props.gallery = Array.isArray(props.gallery) && props.gallery.length > 0 ? props.gallery : [image, image, image, image, image];
+    }
+
+    if (alt) {
+      props.image_alt = alt;
+    }
+  }
+
+  function applyAuthorFields(page, fields, payload) {
+    const image = payload.media && payload.media.primary_image ? payload.media.primary_image.path : '';
+    const alt = payload.media && payload.media.primary_image ? payload.media.primary_image.alt : '';
+    const module = ensureModule(page, 'author_profile', {
+      id: (payload.slug || page.id || 'author') + '-profile',
+      type: 'author_profile',
+      slot: 'main',
+      props: {}
+    });
+    const props = module.props;
+
+    props.name = fields.author_name || fields.title || page.title || props.name || '';
+    props.role = fields.role || props.role || '';
+    props.bio = fields.bio || fields.description || props.bio || '';
+    props.reviews_route = fields.reviews_route || props.reviews_route || '/obzory/';
+    props.social_links = fields.social_links ? parsePipeRows(fields.social_links, ['label', 'url']) : (props.social_links || []);
+
+    if (image) {
+      props.image = image;
+    }
+
+    if (alt) {
+      props.image_alt = alt;
+    }
+  }
+
+  function applyContentFields(page, fields, payload) {
+    const header = ensureModule(page, 'page_header', {
+      id: (payload.slug || page.id || 'page') + '-header',
+      type: 'page_header',
+      slot: 'header',
+      props: {}
+    });
+    const rich = ensureModule(page, 'rich_text', {
+      id: (payload.slug || page.id || 'page') + '-content',
+      type: 'rich_text',
+      slot: 'main',
+      props: {}
+    });
+
+    header.props.heading = fields.title || page.title || header.props.heading || '';
+    header.props.lead = fields.description || header.props.lead || page.seo.description || '';
+
+    if (fields.body_sections || fields.policy_sections || fields.description) {
+      rich.props.content = parseContentBlocks(fields.body_sections || fields.policy_sections || fields.description);
+    }
+
+    if (fields.faq) {
+      const faq = ensureModule(page, 'faq', {
+        id: (payload.slug || page.id || 'page') + '-faq',
+        type: 'faq',
+        slot: 'main',
+        props: {}
+      });
+      faq.props.items = parseFaqItems(fields.faq);
+    }
+  }
+
+  function applyFieldsToPage(page, payload) {
+    const fields = payload.fields || {};
+    const title = String(fields.title || fields.author_name || page.title || '').trim();
+    const description = String(fields.description || fields.bio || fields.verdict || (page.seo && page.seo.description) || '').trim();
+    const image = payload.media && payload.media.primary_image ? payload.media.primary_image.path : '';
+
+    page.status = 'published';
+    page.updated_at = new Date().toISOString();
+
+    Object.entries(fields).forEach(([key, value]) => {
+      if (key.startsWith('page.')) {
+        setEditablePagePath(page, key, value);
+      }
+    });
+
+    if (title) {
+      page.title = title;
+      if (Array.isArray(page.breadcrumbs) && page.breadcrumbs.length > 0) {
+        page.breadcrumbs[page.breadcrumbs.length - 1].title = title;
+      }
+    }
+
+    page.seo = page.seo && typeof page.seo === 'object' ? page.seo : seoForPage(page.title, description, page.route, image, 'website');
+    if (title) {
+      page.seo.title = title;
+    }
+    if (description) {
+      page.seo.description = description;
+    }
+    page.seo.canonical = page.route;
+    page.seo.robots = page.seo.robots || 'index,follow';
+    page.seo.open_graph = page.seo.open_graph && typeof page.seo.open_graph === 'object' ? page.seo.open_graph : {};
+    page.seo.twitter = page.seo.twitter && typeof page.seo.twitter === 'object' ? page.seo.twitter : {};
+    page.seo.open_graph.title = page.seo.title;
+    page.seo.open_graph.description = page.seo.description;
+    page.seo.open_graph.url = page.route;
+    page.seo.twitter.title = page.seo.title;
+    page.seo.twitter.description = page.seo.description;
+
+    if (image) {
+      page.seo.open_graph.image = image;
+      page.seo.twitter.image = image;
+    }
+
+    if (payload.content_type === 'product') {
+      applyProductFields(page, fields, payload);
+    } else if (payload.content_type === 'author') {
+      applyAuthorFields(page, fields, payload);
+    } else {
+      applyContentFields(page, fields, payload);
+    }
+
+    return page;
+  }
+
+  function clientValidateEditorialPayload(payload, contracts) {
+    const issues = [];
+    const targetPath = pageTargetPathForPayload(payload, contracts);
+
+    if (!payload || !payload.slug) {
+      issues.push('Slug is required.');
+    }
+
+    if (!isSafeContentPagePath(targetPath)) {
+      issues.push('Target path must be a safe content/pages/*.json path.');
+    }
+
+    if (!payload.fields || !String(payload.fields.title || payload.fields.author_name || '').trim()) {
+      issues.push('Title or author name is required.');
+    }
+
+    return {
+      ok: issues.length === 0,
+      action: 'github_contents_editorial_validate',
+      dry_run: true,
+      target_path: targetPath,
+      issues,
+      warnings: issues.length === 0 ? ['Проверка выполнена в браузере; GitHub Actions не запускались.'] : []
+    };
+  }
+
+  async function githubSaveEditorialPayload(payload, contracts) {
+    const targetPath = pageTargetPathForPayload(payload, contracts);
+    const validation = clientValidateEditorialPayload(payload, contracts);
+
+    if (!validation.ok) {
+      return validation;
+    }
+
+    let page = null;
+    let sha = '';
+
+    if (payload.mode === 'edit') {
+      const current = await githubReadTextFile(targetPath);
+
+      if (!current.ok) {
+        return current;
+      }
+
+      try {
+        page = JSON.parse(current.content);
+      } catch (error) {
+        return { ok: false, issues: ['Existing page JSON is invalid: ' + (error && error.message ? error.message : 'parse error')] };
+      }
+
+      sha = current.sha || '';
+      applyFieldsToPage(page, payload);
+    } else {
+      page = generatedPageFromPayload(payload, contracts);
+    }
+
+    return githubSaveJsonFile(targetPath, page, 'Save CMS editorial edit: ' + targetPath, sha);
+  }
+
+  async function githubArchivePageContent(relativePath) {
+    if (!isSafeContentPagePath(relativePath)) {
+      return { ok: false, issues: ['Archive target must be a safe content/pages/*.json path.'] };
+    }
+
+    const current = await githubReadTextFile(relativePath);
+
+    if (!current.ok) {
+      return current;
+    }
+
+    let page = null;
+    try {
+      page = JSON.parse(current.content);
+    } catch (error) {
+      return { ok: false, issues: ['Existing page JSON is invalid: ' + (error && error.message ? error.message : 'parse error')] };
+    }
+
+    page.status = 'archived';
+    page.updated_at = new Date().toISOString();
+    page.seo = page.seo && typeof page.seo === 'object' ? page.seo : {};
+    page.seo.robots = 'noindex,nofollow';
+
+    return githubSaveJsonFile(relativePath, page, 'Archive CMS page: ' + relativePath, current.sha || '');
+  }
+
+  async function githubSaveNavigation(payload, dryRun) {
+    const issues = [];
+    const navigation = payload && payload.navigation ? payload.navigation : {};
+
+    if (!Array.isArray(navigation.header) || navigation.header.length === 0) {
+      issues.push('Header navigation must contain at least one group.');
+    }
+
+    if (!Array.isArray(navigation.footer) || navigation.footer.length === 0) {
+      issues.push('Footer navigation must contain at least one group.');
+    }
+
+    if (issues.length > 0 || dryRun) {
+      return {
+        ok: issues.length === 0,
+        action: 'github_contents_site_navigation_validate',
+        dry_run: dryRun,
+        issues,
+        warnings: dryRun && issues.length === 0 ? ['Проверка меню выполнена в браузере; Actions не запускались.'] : []
+      };
+    }
+
+    const current = await githubReadTextFile('config/navigation.json');
+    const sha = current.ok ? current.sha : '';
+
+    return githubSaveJsonFile('config/navigation.json', {
+      header: navigation.header,
+      footer: navigation.footer
+    }, 'Save CMS navigation', sha);
+  }
+
+  async function githubDispatchStaticDeploy(statusSetter, outputSetter) {
+    const config = readGithubConfig();
+
+    if (!githubToken()) {
+      const result = { ok: false, issues: ['GitHub token не подключен.'] };
+      outputSetter(result);
+      statusSetter('Deploy не запущен: token не подключен.');
+      return result;
+    }
+
+    statusSetter('Запускаю отдельный build/deploy workflow...');
+    const result = await githubDispatchWorkflow(config.deploy_workflow_id || 'deploy.yml', {
+      target: 'production',
+      verification_mode: 'content_fast'
+    }, config.deploy_actions_url || '');
+
+    outputSetter(result);
+    statusSetter(result.ok ? 'Build/deploy workflow запущен. Это единственный Actions-этап после пачки сохранений.' : 'Build/deploy workflow не запущен.');
+
+    return result;
+  }
+
   async function submitEditorialMedia(contracts, authContract) {
     const fileInput = document.querySelector('[data-editorial-media-file]');
     const file = fileInput && fileInput.files && fileInput.files.length > 0 ? fileInput.files[0] : null;
@@ -3714,7 +4361,7 @@
         }
 
         setEditorialOutput(result);
-        setEditorialStatus(result.ok ? 'Медиа сохранено в GitHub, deploy запрошен.' : 'GitHub media upload вернул ошибку.');
+        setEditorialStatus(result.ok ? 'Медиа сохранено в GitHub без запуска Actions.' : 'GitHub media upload вернул ошибку.');
 
         return result;
       }
@@ -3772,13 +4419,13 @@
       const payload = currentEditorialPayload(contracts);
 
       editorialState.lastQueuePayload = payload;
-      setEditorialStatus('Публикация через GitHub Actions...');
+      setEditorialStatus('Сохраняю редакторскую правку через GitHub Contents API...');
       setEditorialOutput(payload);
 
-      const result = await githubDispatchCommand('publish', payload, false);
+      const result = await githubSaveEditorialPayload(payload, contracts);
 
       setEditorialOutput(result);
-      setEditorialStatus(result.ok ? 'GitHub workflow публикации запущен.' : 'GitHub workflow публикации не запущен.');
+      setEditorialStatus(result.ok ? 'Сохранено в GitHub без запуска Actions. Для обновления сайта нажмите «Собрать и деплой».' : 'Сохранение в GitHub вернуло ошибку.');
 
       return result;
     }
@@ -3832,10 +4479,10 @@
     setEditorialOutput(payload);
 
     if (isGithubMode()) {
-      const result = await githubDispatchCommand('archive', payload, false);
+      const result = await githubArchivePageContent(selectedResource);
 
       setEditorialOutput(result);
-      setEditorialStatus(result.ok ? 'GitHub workflow удаления запущен.' : 'GitHub workflow удаления не запущен.');
+      setEditorialStatus(result.ok ? 'Страница помечена archived/noindex в GitHub без запуска Actions.' : 'Архивация через GitHub Contents вернула ошибку.');
 
       return result;
     }
@@ -3885,6 +4532,7 @@
       const validateButton = widget.querySelector('[data-editorial-queue-validate]');
       const mediaButton = widget.querySelector('[data-editorial-media-save]');
       const publishButton = widget.querySelector('[data-editorial-publish]');
+      const deployButton = widget.querySelector('[data-github-static-deploy]');
       const archiveButton = widget.querySelector('[data-editorial-archive-submit]');
 
       widget.dataset.editorialBound = 'true';
@@ -3964,6 +4612,10 @@
 
       if (publishButton) {
         publishButton.addEventListener('click', () => submitEditorialPublish(contracts, activeAuthContract(authContract)));
+      }
+
+      if (deployButton) {
+        deployButton.addEventListener('click', () => githubDispatchStaticDeploy(setEditorialStatus, setEditorialOutput));
       }
 
       if (archiveButton) {
@@ -4243,7 +4895,7 @@
 
     document.querySelectorAll('[data-product-card-input]').forEach((input) => {
       const key = input.getAttribute('data-product-card-input') || '';
-      const field = editorialFieldByKey(config, 'product', key);
+      const field = editorialFieldsFor(config, 'product').find((item) => item && item.key === key) || null;
 
       if (key) {
         fields[key] = field && field.input_type === 'list'
@@ -4303,10 +4955,10 @@
     setProductCardOutput(payload);
 
     if (isGithubMode()) {
-      const result = await githubDispatchCommand('publish', payload, true);
+      const result = clientValidateEditorialPayload(payload, contracts);
 
       setProductCardOutput(result);
-      setProductCardStatus(result.ok ? 'GitHub dry-run карточки отправлен в Actions.' : 'GitHub dry-run карточки не запущен.');
+      setProductCardStatus(result.ok ? 'Проверка карточки выполнена локально. Actions не запускались.' : 'Проверка карточки нашла ошибки.');
 
       return result;
     }
@@ -4374,7 +5026,7 @@
         }
 
         setProductCardOutput(result);
-        setProductCardStatus(result.ok ? 'Медиа карточки сохранено в GitHub, deploy запрошен.' : 'GitHub media upload карточки вернул ошибку.');
+        setProductCardStatus(result.ok ? 'Медиа карточки сохранено в GitHub без запуска Actions.' : 'GitHub media upload карточки вернул ошибку.');
 
         return result;
       }
@@ -4409,13 +5061,13 @@
       const payload = currentProductCardPayload(contracts);
 
       productCardState.lastQueuePayload = payload;
-      setProductCardStatus('Публикация карточки через GitHub Actions...');
+      setProductCardStatus('Сохраняю карточку через GitHub Contents API...');
       setProductCardOutput(payload);
 
-      const result = await githubDispatchCommand('publish', payload, false);
+      const result = await githubSaveEditorialPayload(payload, contracts);
 
       setProductCardOutput(result);
-      setProductCardStatus(result.ok ? 'GitHub workflow публикации карточки запущен.' : 'GitHub workflow публикации карточки не запущен.');
+      setProductCardStatus(result.ok ? 'Карточка сохранена в GitHub без запуска Actions. Для обновления сайта нажмите «Собрать и деплой».' : 'Сохранение карточки вернуло ошибку.');
 
       return result;
     }
@@ -4477,6 +5129,7 @@
       const validateButton = widget.querySelector('[data-product-card-validate]');
       const mediaButton = widget.querySelector('[data-product-card-media-save]');
       const publishButton = widget.querySelector('[data-product-card-publish]');
+      const deployButton = widget.querySelector('[data-github-static-deploy]');
 
       widget.dataset.productCardBound = 'true';
 
@@ -4558,6 +5211,10 @@
 
       if (publishButton) {
         publishButton.addEventListener('click', () => submitProductCardPublish(contracts, activeAuthContract(authContract)));
+      }
+
+      if (deployButton) {
+        deployButton.addEventListener('click', () => githubDispatchStaticDeploy(setProductCardStatus, setProductCardOutput));
       }
     }
 
@@ -6708,7 +7365,7 @@
 
       applyGithubActor(githubState.actorLogin || 'unknown-github-user');
       renderAdminBootstrap(payload);
-      setGithubStatus('GitHub подключен: ' + (authState.actor ? authState.actor.username + ' / ' + authState.actor.role : 'unknown') + '. Команды публикации будут запускать workflow_dispatch.');
+      setGithubStatus('GitHub подключен: ' + (authState.actor ? authState.actor.username + ' / ' + authState.actor.role : 'unknown') + '. Редакторские сохранения пишутся через Contents API; Actions запускаются только для build/deploy.');
     } catch (error) {
       clearAdminBootstrap('GitHub bootstrap unavailable');
       setGithubStatus('Bootstrap недоступен: ' + (error && error.message ? error.message : 'network error'));
