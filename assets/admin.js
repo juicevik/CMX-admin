@@ -64,7 +64,7 @@
     connected: false,
     actorLogin: '',
     actorProfile: null,
-    rateLimitMessage: 'Лимиты не загружены',
+    rateLimitMessage: 'Act n/a · CF Workers 100k/day',
     rateLimitVisible: false
   };
   const adminThemeStorageKey = 'cms.admin.theme';
@@ -953,7 +953,7 @@
 
   async function loadGithubRateLimit() {
     if (!githubToken()) {
-      setGithubRateLimit('Лимиты не загружены', false);
+      setGithubRateLimit('Act n/a · CF Workers 100k/day', false);
       return;
     }
 
@@ -961,22 +961,19 @@
       const { response, payload } = await fetchGithubJson('/rate_limit');
 
       if (!response.ok || !payload || !payload.resources) {
-        setGithubRateLimit('Лимиты GitHub API недоступны', true);
+        setGithubRateLimit('Act n/a · CF Workers 100k/day', true);
         return;
       }
 
-      const core = payload.resources.core || {};
       const actionsLabel = await loadGithubActionsUsage();
-      const resetAt = core.reset ? new Date(Number(core.reset) * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'n/a';
       const parts = [
-        'API ' + (core.remaining ?? '?') + '/' + (core.limit ?? '?'),
         actionsLabel,
-        'R ' + resetAt
+        'CF Workers 100k/day'
       ];
 
       setGithubRateLimit(parts.join(' · '), true);
     } catch (error) {
-      setGithubRateLimit('Лимиты GitHub API недоступны', true);
+      setGithubRateLimit('Act n/a · CF Workers 100k/day', true);
     }
   }
 
@@ -3929,11 +3926,78 @@
     help.setAttribute('role', 'button');
     help.setAttribute('aria-label', text);
     help.dataset.tooltip = text;
-    help.textContent = '❔';
-    help.addEventListener('mouseenter', () => alignHelpBubble(help));
-    help.addEventListener('focus', () => alignHelpBubble(help));
+    help.textContent = '?';
+    help.addEventListener('mouseenter', () => showFloatingHelp(help));
+    help.addEventListener('focus', () => showFloatingHelp(help));
+    help.addEventListener('mouseleave', hideFloatingHelp);
+    help.addEventListener('blur', hideFloatingHelp);
 
     return help;
+  }
+
+  function floatingHelpNode() {
+    let node = document.querySelector('[data-admin-floating-help]');
+
+    if (!node) {
+      node = document.createElement('div');
+      node.className = 'admin-tooltip';
+      node.setAttribute('role', 'tooltip');
+      node.setAttribute('data-admin-floating-help', 'true');
+      node.hidden = true;
+      document.body.appendChild(node);
+    }
+
+    return node;
+  }
+
+  function showFloatingHelp(help) {
+    alignHelpBubble(help);
+
+    if (!help || typeof help.getBoundingClientRect !== 'function') {
+      return;
+    }
+
+    const text = help.dataset.tooltip || help.getAttribute('aria-label') || '';
+    const tooltip = floatingHelpNode();
+
+    if (!text || !tooltip) {
+      return;
+    }
+
+    tooltip.textContent = text;
+    tooltip.hidden = false;
+    tooltip.dataset.visible = 'true';
+
+    requestAnimationFrame(() => {
+      const margin = 10;
+      const helpRect = help.getBoundingClientRect();
+      const tooltipRect = tooltip.getBoundingClientRect();
+      const viewportWidth = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+      const viewportHeight = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
+      let left = helpRect.left + helpRect.width / 2 - tooltipRect.width / 2;
+      let top = helpRect.top - tooltipRect.height - 8;
+
+      if (top < margin) {
+        top = helpRect.bottom + 8;
+      }
+
+      left = Math.max(margin, Math.min(left, viewportWidth - tooltipRect.width - margin));
+      top = Math.max(margin, Math.min(top, viewportHeight - tooltipRect.height - margin));
+
+      tooltip.style.left = left + 'px';
+      tooltip.style.top = top + 'px';
+    });
+  }
+
+  function hideFloatingHelp() {
+    const tooltip = document.querySelector('[data-admin-floating-help]');
+
+    if (!tooltip) {
+      return;
+    }
+
+    tooltip.dataset.visible = 'false';
+    tooltip.hidden = true;
   }
 
   function tooltipBoundary(help) {
@@ -4144,12 +4208,10 @@
 
   function enhanceMetricHelp() {
     const helps = {
-      'Статус': 'Показывает, загружена ли админка и сколько страниц, опубликованных записей и модулей видит текущая сборка.',
-      'Страниц': 'Общее количество page JSON, доступных админке в текущем контексте.',
-      'Опубл.': 'Количество страниц со статусом published.',
-      'Модулей': 'Количество зарегистрированных модулей, из которых собираются страницы.',
+      'Статус': 'Показывает короткое состояние панели. Если текст длинный, он прокручивается внутри карточки.',
+      'Контент': 'Показывает общее количество страниц, опубликованные страницы и сколько сайтов сейчас зарегистрировано в панели.',
       'Версия': 'Версия сборщика админки и схемы панели.',
-      'GitHub лимиты': 'Показывает REST API rate limit и Actions usage, чтобы не тратить GitHub Actions на обычную редактуру.'
+      'Лимиты': 'Показывает главный расходуемый лимит GitHub Actions и контрольный лимит Cloudflare Workers для CMS API.'
     };
 
     document.querySelectorAll('.metric').forEach((metric) => {
@@ -7437,7 +7499,7 @@
 
   function githubMetricHtml(value) {
     return '<article class="metric metric--github-rate" data-github-rate-limit data-rate-state="' + (githubState.rateLimitVisible ? 'ready' : 'pending') + '">'
-      + '<h1>GitHub лимиты</h1><h3 data-github-rate-limit-value>' + escapeHtml(value) + '</h3></article>';
+      + '<h1>Лимиты</h1><h3 data-github-rate-limit-value>' + escapeHtml(value) + '</h3></article>';
   }
 
   function renderAdminMetrics(manifest) {
@@ -7454,18 +7516,17 @@
     const totalPages = Number(summary.total_pages || 0);
     const publishedPages = Number(summary.published_pages || 0);
     const modules = Number(summary.modules || 0);
+    const sites = manifest && Array.isArray(manifest.sites) ? manifest.sites.length : 0;
     const statusMessage = totalPages || modules
       ? 'Готово'
       : 'Ожидание';
     const statusDetail = totalPages || modules
-      ? 'стр ' + totalPages + ' · опубл ' + publishedPages + ' · сохр ' + totalPages + ' · мод ' + modules
+      ? 'Краткая сводка: структура загружена, редактор готов. Страницы ' + totalPages + ', опубликовано ' + publishedPages + ', сайтов ' + sites + '.'
       : 'Данные еще загружаются';
 
     target.innerHTML = [
       metricHtml('Статус', statusMessage, statusDetail, 'metric--status'),
-      metricHtml('Страниц', totalPages),
-      metricHtml('Опубл.', publishedPages),
-      metricHtml('Модулей', modules),
+      metricHtml('Контент', totalPages + '/' + publishedPages, 'страниц / опубликовано · сайтов ' + sites),
       metricHtml('Версия', manifest && manifest.version ? manifest.version : 'n/a'),
       githubMetricHtml(githubRateMessage)
     ].join('');
@@ -9573,7 +9634,7 @@
       setAccountPanelOpen(false);
       clearAdminBootstrap('GitHub token удален из sessionStorage');
       setGithubStatus('GitHub token удален из текущего браузера.');
-      setGithubRateLimit('Лимиты не загружены', false);
+      setGithubRateLimit('Act n/a · CF Workers 100k/day', false);
     };
 
     if (tokenInput && storedToken) {

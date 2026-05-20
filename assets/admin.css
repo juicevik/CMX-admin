@@ -3227,30 +3227,7 @@ body[data-site-context="missing"] .site-workflow__active select {
 }
 
 .field-help::after {
-  box-sizing: border-box;
-  position: absolute;
-  left: 50%;
-  bottom: calc(100% + 0.55rem);
-  z-index: 40;
-  width: min(22rem, var(--tooltip-max-width, calc(100vw - 2rem)));
-  max-width: calc(100vw - 2rem);
-  padding: 0.65rem 0.75rem;
-  border: 1px solid var(--admin-border);
-  border-radius: var(--admin-radius-control);
-  background: var(--admin-text);
-  color: var(--admin-surface);
-  box-shadow: var(--admin-shadow-panel);
-  content: attr(data-tooltip);
-  font-size: 0.78rem;
-  font-weight: 700;
-  line-height: 1.35;
-  opacity: 0;
-  pointer-events: none;
-  text-align: left;
-  transform: translate(-50%, 0.25rem);
-  transition: opacity 0.16s ease, transform 0.16s ease;
-  white-space: normal;
-  overflow-wrap: anywhere;
+  display: none;
 }
 
 .field-help:hover::after,
@@ -3711,5 +3688,186 @@ body[data-site-context="missing"] .site-workflow__active select {
     position: static;
     width: 100%;
     margin-top: var(--admin-space-3);
+  }
+}
+
+/* CMS-admin_v2 compact chrome overrides */
+.admin-topbar {
+  grid-template-columns: auto minmax(16rem, 1fr) auto;
+  padding: 0.55rem 0;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none;
+}
+
+.admin-brand span {
+  width: auto;
+  height: auto;
+  padding: 0;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--admin-accent-strong);
+  font-size: clamp(1.12rem, 1.75vw, 1.36rem);
+  letter-spacing: 0;
+}
+
+.admin-nav {
+  justify-content: center;
+  gap: 0.32rem 0.72rem;
+  padding: 0;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.admin-nav__item {
+  min-height: 2.15rem;
+  padding-inline: 0.38rem;
+  border-radius: 10px;
+  color: var(--admin-text);
+}
+
+.admin-nav__symbol {
+  display: grid;
+  flex: 0 0 0.85rem;
+  place-items: center;
+  width: 0.85rem;
+  height: 0.85rem;
+  color: var(--admin-accent-strong);
+  font-size: 0.76rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.admin-nav__item[aria-current="page"]::after {
+  left: 0.38rem;
+  right: 0.38rem;
+  bottom: -0.28rem;
+}
+
+.admin-metrics {
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1.35fr) !important;
+}
+
+.metric {
+  min-height: 4.85rem;
+  padding: 0.68rem 0.72rem 0.62rem 2.35rem;
+  overflow: hidden;
+}
+
+.metric::before {
+  width: 1.14rem;
+  height: 1.14rem;
+}
+
+.metric span,
+.metric--github-rate h1 {
+  color: var(--admin-muted) !important;
+  font-size: 0.64rem !important;
+  line-height: 1.1;
+  text-transform: none;
+}
+
+.metric strong {
+  margin-top: 0.18rem !important;
+  font-size: clamp(1rem, 1.45vw, 1.28rem) !important;
+  line-height: 1.14;
+  text-shadow: none !important;
+}
+
+.metric small,
+.metric--github-rate h3 {
+  color: var(--admin-muted) !important;
+  font-size: 0.58rem !important;
+  line-height: 1.25 !important;
+  text-shadow: none !important;
+}
+
+.metric--status small {
+  max-height: 2.45rem;
+  overflow: auto;
+  padding-right: 0.15rem;
+}
+
+.metric--github-rate {
+  gap: 0;
+}
+
+.metric--github-rate h3 {
+  margin-top: 0.28rem;
+}
+
+.field-help,
+.metric .field-help--metric,
+.field-help--card {
+  width: 0.66rem;
+  height: 0.66rem;
+  min-width: 0.66rem;
+  border-width: 1px;
+  color: #071321;
+  font-size: 0.46rem;
+  font-weight: 950;
+  box-shadow: none;
+}
+
+.admin-tooltip {
+  box-sizing: border-box;
+  position: fixed;
+  z-index: 10000;
+  width: max-content;
+  max-width: min(22rem, calc(100vw - 1.25rem));
+  padding: 0.58rem 0.68rem;
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-control);
+  background: var(--admin-text);
+  color: var(--admin-surface);
+  box-shadow: var(--admin-shadow-panel);
+  font-size: 0.74rem;
+  font-weight: 750;
+  line-height: 1.34;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+
+.editorial-matrix__row > input[type="checkbox"],
+.editorial-linking input[type="checkbox"],
+.checkbox-row input[type="checkbox"],
+.domain-design__toggle input[type="checkbox"] {
+  width: 0.82rem;
+  height: 0.82rem;
+  min-width: 0.82rem;
+}
+
+:root[data-admin-theme="dark"] .admin-nav__symbol,
+:root:not([data-admin-theme]) .admin-nav__symbol {
+  color: #20f3ff;
+  text-shadow: 0 0 12px rgba(24, 230, 246, 0.48);
+}
+
+:root[data-admin-theme="dark"] .field-help,
+:root:not([data-admin-theme]) .field-help {
+  color: #eaffff;
+  border-color: rgba(24, 230, 246, 0.48);
+  background: rgba(24, 230, 246, 0.1);
+}
+
+@media (max-width: 980px) {
+  .admin-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .admin-topbar {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-metrics {
+    grid-template-columns: 1fr !important;
   }
 }
