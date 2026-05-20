@@ -1389,8 +1389,24 @@
 
     return profiles.map((profile) => ({
       value: String(profile.site_id || ''),
-      label: String(profile.display_name || profile.domain || profile.site_id || 'Site')
+      label: siteProfileOptionLabel(profile)
     }));
+  }
+
+  function siteProfileOptionLabel(profile) {
+    const domain = String(profile && profile.domain ? profile.domain : '').trim();
+    const brand = String(profile && profile.display_name ? profile.display_name : '').trim();
+    const fallback = String(profile && profile.site_id ? profile.site_id : 'Site').trim();
+
+    if (domain && brand && brand.toLowerCase() !== domain.toLowerCase()) {
+      return domain + ' / ' + brand;
+    }
+
+    if (domain) {
+      return domain + ' / ' + fallback;
+    }
+
+    return fallback;
   }
 
   function renderSiteWorkflow(manifest) {
@@ -1617,6 +1633,14 @@
       }
     });
 
+    if (
+      profile.deploy_profile.provider === 'cloudflare_pages'
+      && !profile.deploy_profile.public_root
+      && profile.domain
+    ) {
+      profile.deploy_profile.public_root = '/var/www/' + String(profile.domain).trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    }
+
     document.querySelectorAll('[data-site-fleet-cloudflare-field]').forEach((field) => {
       const key = field.getAttribute('data-site-fleet-cloudflare-field') || '';
 
@@ -1624,6 +1648,12 @@
         profile.deploy_profile.cloudflare[key] = field.value.trim();
       }
     });
+
+    profile.deploy_profile.vps_mirror = {
+      enabled: profile.deploy_profile.provider === 'cloudflare_pages',
+      mode: 'static_copy_only',
+      public_root: profile.deploy_profile.public_root || ''
+    };
 
     document.querySelectorAll('[data-site-fleet-medgen-field]').forEach((field) => {
       const key = field.getAttribute('data-site-fleet-medgen-field') || '';
@@ -3080,7 +3110,7 @@
     };
   }
 
-  async function runMedGenWorkflow(dryRun) {
+  async function runMedGenWorkflow(dryRun, mode) {
     if (!isGithubMode()) {
       setMedGenStatus('MedGen доступен только в CMS-admin_v2 на GitHub Pages.');
       setMedGenOutput({ ok: false, issues: ['github_pages_admin_required'] });
@@ -3091,8 +3121,24 @@
       return;
     }
 
-    if (!dryRun && !window.confirm('Запустить MedGen workflow? Генерация может занять до 30 минут.')) {
+    const workflowMode = mode || (dryRun ? 'create_task' : 'create_task');
+    const isPoll = workflowMode === 'poll_task';
+    const taskIdField = byId('admin-medgen-task-id');
+    const taskId = taskIdField && taskIdField.value.trim() ? taskIdField.value.trim() : '';
+
+    if (isPoll && !taskId) {
+      setMedGenStatus('Укажите task_id для проверки готовности.');
+      setMedGenOutput({ ok: false, issues: ['medgen_task_id_required'] });
+      return;
+    }
+
+    if (!dryRun && !isPoll && !window.confirm('Создать MedGen task_id? Workflow завершится сразу после создания задачи, без ожидания генерации.')) {
       setMedGenStatus('MedGen запуск отменен');
+      return;
+    }
+
+    if (!dryRun && isPoll && !window.confirm('Проверить MedGen task_id коротким workflow? Если задача готова, CMS применит результат.')) {
+      setMedGenStatus('Проверка MedGen отменена');
       return;
     }
 
@@ -3103,13 +3149,15 @@
     const workflow = config.medgen_workflow_id || 'medgen-content.yml';
     const payload = collectMedGenPayload();
 
-    setMedGenStatus(dryRun ? 'Проверяю MedGen payload...' : 'Запускаю MedGen workflow...');
+    setMedGenStatus(dryRun ? 'Проверяю MedGen payload...' : (isPoll ? 'Проверяю MedGen task_id...' : 'Создаю MedGen task_id...'));
     setStatusBusy('admin-medgen-status', true);
 
     try {
       const result = await githubDispatchWorkflow(workflow, {
         medgen_payload_json: JSON.stringify(payload),
         dry_run: dryRun ? 'true' : 'false',
+        mode: dryRun ? 'create_task' : workflowMode,
+        task_id: taskId,
         poll_timeout_seconds: timeoutField && timeoutField.value.trim() ? timeoutField.value.trim() : '1800',
         poll_interval_seconds: intervalField && intervalField.value.trim() ? intervalField.value.trim() : '5',
         deploy_static_vps: deployField && deployField.checked && !dryRun && hostingProvider(activeSiteProfile()) === 'static_vps' ? 'true' : 'false',
@@ -3117,7 +3165,7 @@
       }, config.medgen_actions_url || '');
 
       setMedGenOutput(result);
-      setMedGenStatus(result.ok ? 'MedGen workflow запущен. Следите за статусом в GitHub Actions.' : 'MedGen workflow не запущен.');
+      setMedGenStatus(result.ok ? (isPoll ? 'Проверка MedGen запущена. Если задача готова, результат будет применен.' : 'MedGen task creation запущен. Workflow не будет ждать 15-30 минут.') : 'MedGen workflow не запущен.');
     } finally {
       setStatusBusy('admin-medgen-status', false);
     }
@@ -4186,7 +4234,8 @@
       'data-site-fleet-archive': 'Архивирует профиль сайта. Публичные файлы не удаляются без отдельного workflow.',
       'data-domain-hosting-provider-select': 'Выбирает среду установки нового сайта. Для VPS открываются SSH, Ubuntu и SSL. Для Cloudflare открываются Pages, Worker, D1, R2 и KV.',
       'data-medgen-dry-run': 'Проверяет задачу MedGen без публикации и deploy.',
-      'data-medgen-run': 'Запускает workflow MedGen после brief и подтверждения.',
+      'data-medgen-run': 'Быстро создает MedGen task_id и завершает workflow без ожидания генерации.',
+      'data-medgen-poll': 'Коротко проверяет ранее созданный task_id. Если задача готова, применяет результат в CMS.',
       'data-agent-key-generate': 'Создает новый API-ключ для ИИ-агента. Raw key показывается только один раз.',
       'data-agent-key-save': 'Сохраняет hash/fingerprint и права agent key, не сохраняя raw key.',
       'data-admin-user-save': 'Сохраняет GitHub-пользователя, роль и права редактора.',
@@ -7329,13 +7378,18 @@
 
     const dryRun = panel.querySelector('[data-medgen-dry-run]');
     const run = panel.querySelector('[data-medgen-run]');
+    const poll = panel.querySelector('[data-medgen-poll]');
 
     if (dryRun) {
-      dryRun.addEventListener('click', () => runMedGenWorkflow(true));
+      dryRun.addEventListener('click', () => runMedGenWorkflow(true, 'create_task'));
     }
 
     if (run) {
-      run.addEventListener('click', () => runMedGenWorkflow(false));
+      run.addEventListener('click', () => runMedGenWorkflow(false, 'create_task'));
+    }
+
+    if (poll) {
+      poll.addEventListener('click', () => runMedGenWorkflow(false, 'poll_task'));
     }
   }
 
