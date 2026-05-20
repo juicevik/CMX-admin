@@ -1261,15 +1261,19 @@
 
     const domain = String(profile.domain || '').trim();
     const baseUrl = String(profile.base_url || (domain ? 'https://' + domain : '')).trim();
+    const contactEmail = String(profile.contact_email || contactEmailFromDomain(domain)).trim();
     const locale = String(profile.root_locale || '').trim();
     const title = String(profile.display_name || domain || '').trim();
 
     [
       ['admin-medgen-site-domain', domain],
       ['admin-medgen-site-name', title],
+      ['admin-medgen-contact-email', contactEmail],
       ['admin-medgen-locale', locale],
       ['admin-domain-name', domain],
       ['admin-domain-base-url', baseUrl],
+      ['admin-domain-email', contactEmail],
+      ['admin-deploy-tls-email', contactEmail],
       ['admin-domain-default-locale', locale],
       ['admin-domain-supplement-prefix', siteRouteNamespace(profile, 'supplement')],
       ['admin-domain-author-prefix', siteRouteNamespace(profile, 'author')],
@@ -1547,6 +1551,7 @@
     setSiteFleetField('[data-site-fleet-field="display_name"]', profile.display_name || '');
     setSiteFleetField('[data-site-fleet-field="domain"]', profile.domain || '');
     setSiteFleetField('[data-site-fleet-field="base_url"]', profile.base_url || '');
+    setSiteFleetField('[data-site-fleet-field="contact_email"]', profile.contact_email || contactEmailFromDomain(profile.domain || ''));
     setSiteFleetField('[data-site-fleet-field="root_locale"]', profile.root_locale || '');
     setSiteFleetField('[data-site-fleet-field="geo_country"]', profile.geo_country || '');
     setSiteFleetField('[data-site-fleet-field="status"]', profile.status || 'draft');
@@ -1615,6 +1620,10 @@
 
     if (profile.geo_country) {
       profile.market.country = String(profile.geo_country).trim().toUpperCase();
+    }
+
+    if (!profile.contact_email && profile.domain) {
+      profile.contact_email = contactEmailFromDomain(profile.domain);
     }
 
     document.querySelectorAll('[data-site-fleet-route-prefix]').forEach((field) => {
@@ -3049,6 +3058,16 @@
       payload.site = site;
     }
 
+    if (!payload.contact_email && site.domain) {
+      const contactEmail = contactEmailFromDomain(site.domain);
+      if (contactEmail) {
+        payload.contact_email = contactEmail;
+      }
+    }
+    if (payload.contact_email && payload.site && typeof payload.site === 'object' && !payload.site.contact_email) {
+      payload.site.contact_email = payload.contact_email;
+    }
+
     const target = {};
     document.querySelectorAll('[data-medgen-target-field]').forEach((field) => {
       const key = field.getAttribute('data-medgen-target-field') || '';
@@ -3183,10 +3202,23 @@
     return /^[a-z]/.test(normalized) ? normalized.slice(0, 49) : ('site-' + normalized).slice(0, 49);
   }
 
+  function contactEmailFromDomain(value) {
+    const domain = String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/^https?:\/\//, '')
+      .replace(/^www\./, '')
+      .replace(/\/.*$/, '')
+      .replace(/[^a-z0-9.-]+/g, '');
+
+    return domain && domain.includes('.') ? 'support@' + domain : '';
+  }
+
   function fillDomainDefaults() {
     const domainField = byId('admin-domain-name');
     const baseUrlField = byId('admin-domain-base-url');
     const emailField = byId('admin-domain-email');
+    const tlsEmailField = byId('admin-deploy-tls-email');
     const routeSeedField = byId('admin-domain-route-seed');
     const defaultLocaleField = byId('admin-domain-default-locale');
 
@@ -3205,7 +3237,11 @@
     }
 
     if (domain && emailField && !emailField.value.trim()) {
-      emailField.value = 'info@' + domain;
+      emailField.value = contactEmailFromDomain(domain);
+    }
+
+    if (domain && tlsEmailField && !tlsEmailField.value.trim()) {
+      tlsEmailField.value = contactEmailFromDomain(domain);
     }
 
     if (domain && routeSeedField && !routeSeedField.value.trim()) {
@@ -4342,6 +4378,7 @@
       'admin-site-fleet-select': 'Выбирает профиль сайта в разделе управления сайтами.',
       'admin-site-fleet-id': 'Стабильный site_id профиля. Используется в config/sites/*.json.',
       'admin-site-fleet-domain': 'Домен профиля сайта.',
+      'admin-site-fleet-contact-email': 'Контактная почта сайта. Если поле пустое, CMX подставит support@домен.',
       'admin-site-fleet-locale': 'Язык сайта в single-root модели.',
       'admin-site-fleet-country': 'Страна/гео, под которую оптимизируется сайт.',
       'admin-site-fleet-deploy-provider': 'Выбирает, куда публиковать статический сайт: на VPS через SSH или в Cloudflare Pages без VPS runtime.',
