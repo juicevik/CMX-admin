@@ -2901,7 +2901,7 @@ body[data-site-context="missing"] .site-workflow__active select {
 .site-workflow__release-counts,
 .site-workflow__release-lists {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
   gap: var(--admin-space-3);
 }
 

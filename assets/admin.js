@@ -712,6 +712,13 @@
     });
   }
 
+  async function cloudflarePrepareRuntimeRelease(siteId, payload) {
+    return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/runtime-releases', {
+      method: 'POST',
+      body: JSON.stringify(Object.assign({}, payload || {}, { site_id: siteId }))
+    });
+  }
+
   function cloudflareRuntimeForActiveSite() {
     return isGithubMode()
       && cloudflareRuntimeEnabled()
@@ -1502,7 +1509,8 @@
       counts: document.querySelectorAll('[data-release-status-count]'),
       packages: document.querySelector('[data-release-status-packages]'),
       batches: document.querySelector('[data-release-status-batches]'),
-      refresh: document.querySelector('[data-release-status-refresh]')
+      refresh: document.querySelector('[data-release-status-refresh]'),
+      prepare: document.querySelector('[data-runtime-release-prepare]')
     };
   }
 
@@ -1574,13 +1582,15 @@
       pending,
       accepted: releaseCount(status, 'accepted'),
       preview_ready: releaseCount(status, 'preview_ready'),
+      release_prepared: releaseCount(status, 'release_prepared'),
       release_queued: releaseCount(status, 'release_queued')
     };
+    const prepared = Number(status.prepared_package_count || counts.release_prepared || 0);
     const deployText = pending > 0
-      ? 'К следующему batch deploy готово правок: ' + pending + '.'
-      : 'Новых принятых правок для deploy нет.';
+      ? 'К runtime release готово правок: ' + pending + '.'
+      : (prepared > 0 ? 'Runtime release подготовлен: ' + prepared + ' пакетов ждут publish-адаптер.' : 'Новых принятых правок для deploy нет.');
 
-    elements.panel.dataset.releaseStatusState = pending > 0 ? 'pending' : 'clean';
+    elements.panel.dataset.releaseStatusState = pending > 0 ? 'pending' : (prepared > 0 ? 'prepared' : 'clean');
 
     if (elements.summary) {
       elements.summary.value = deployText;
@@ -1652,17 +1662,71 @@
     return status;
   }
 
+  async function prepareRuntimeReleaseForActiveSite() {
+    const profile = activeSiteProfile();
+    const elements = releaseStatusElements();
+
+    if (!elements.panel) {
+      return { ok: false, issues: ['release_status_panel_missing'] };
+    }
+
+    if (!profile || hostingProvider(profile) !== 'cloudflare_pages') {
+      resetReleaseStatusView('Runtime release доступен только для выбранного Cloudflare Pages сайта.', 'error');
+      return { ok: false, issues: ['cloudflare_pages_site_required'] };
+    }
+
+    const siteId = cloudflareSiteIdFromProfile(profile);
+    const deploy = profile && profile.deploy_profile ? profile.deploy_profile : {};
+    const cloudflare = deploy && deploy.cloudflare ? deploy.cloudflare : {};
+
+    if (!siteId) {
+      resetReleaseStatusView('Сначала выберите активный домен сайта.', 'error');
+      return { ok: false, issues: ['site_context_required'] };
+    }
+
+    resetReleaseStatusView('Готовлю runtime release в Cloudflare без GitHub Actions...', 'loading');
+
+    const result = await cloudflarePrepareRuntimeRelease(siteId, {
+      request_id: 'runtime-release-' + Date.now(),
+      pages_project: cloudflare.pages_project || '',
+      source: 'admin_release_status_panel'
+    });
+
+    if (result && result.ok) {
+      const count = Number(result.package_count || 0);
+      const message = count > 0
+        ? 'Runtime release подготовлен в Cloudflare: ' + count + ' пакетов. Actions не запускались.'
+        : 'Новых accepted правок нет. Actions не запускались.';
+      resetReleaseStatusView(message, count > 0 ? 'prepared' : 'clean');
+    } else {
+      const issues = result && Array.isArray(result.issues) ? result.issues.join('; ') : 'runtime release endpoint недоступен';
+      resetReleaseStatusView('Runtime release не подготовлен: ' + issues, 'error');
+    }
+
+    await refreshReleaseStatusForActiveSite({ silent: true });
+    return result;
+  }
+
   function wireReleaseStatusPanel() {
     const elements = releaseStatusElements();
 
-    if (!elements.refresh || elements.refresh.dataset.releaseStatusBound === 'true') {
+    if (!elements.refresh && !elements.prepare) {
       return;
     }
 
-    elements.refresh.dataset.releaseStatusBound = 'true';
-    elements.refresh.addEventListener('click', () => {
-      refreshReleaseStatusForActiveSite({ silent: false });
-    });
+    if (elements.refresh && elements.refresh.dataset.releaseStatusBound !== 'true') {
+      elements.refresh.dataset.releaseStatusBound = 'true';
+      elements.refresh.addEventListener('click', () => {
+        refreshReleaseStatusForActiveSite({ silent: false });
+      });
+    }
+
+    if (elements.prepare && elements.prepare.dataset.runtimeReleaseBound !== 'true') {
+      elements.prepare.dataset.runtimeReleaseBound = 'true';
+      elements.prepare.addEventListener('click', () => {
+        prepareRuntimeReleaseForActiveSite();
+      });
+    }
   }
 
   function renderSiteWorkflow(manifest) {
@@ -5887,14 +5951,14 @@
     }
 
     if (hostingProvider(activeSiteProfile()) !== 'static_vps') {
-      statusSetter('Готовлю Cloudflare release и Pages deploy...');
+      statusSetter('Готовлю Cloudflare runtime release без GitHub Actions...');
       setStatusBusy('admin-draft-action-status', true);
 
       try {
         const result = await cloudflarePublishActiveSite();
 
         outputSetter(result);
-        statusSetter(result.ok ? 'Cloudflare Pages deploy workflow запущен.' : 'Cloudflare publish/deploy не выполнен.');
+        statusSetter(result.ok ? 'Cloudflare runtime release подготовлен. GitHub Actions не запускались.' : 'Cloudflare publish/runtime release не выполнен.');
         return result;
       } finally {
         setStatusBusy('admin-draft-action-status', false);
@@ -6007,34 +6071,27 @@
       return published;
     }
 
-    const config = readGithubConfig();
-    const workflow = config.cloudflare_pages_publish_workflow_id || 'cloudflare-pages-publish.yml';
-    const deployResult = await githubDispatchWorkflow(workflow, {
-      site_id: siteId,
+    const runtimeRelease = await cloudflarePrepareRuntimeRelease(siteId, {
+      request_id: 'runtime-release-' + Date.now(),
       pages_project: cloudflare.pages_project || '',
+      source: 'admin_publish_action',
       build_profile: cloudflareBuildProfile(profile, siteId),
       environment: deploy.environment || 'production'
-    }, config.cloudflare_pages_publish_actions_url || '');
-    let releaseBatch = null;
-
-    if (deployResult.ok) {
-      releaseBatch = await cloudflareCreateReleaseBatch(siteId, {
-        request_id: 'batch-cloudflare-pages-' + Date.now(),
-        pages_project: cloudflare.pages_project || '',
-        workflow,
-        workflow_run_url: deployResult.data && deployResult.data.actions_url ? deployResult.data.actions_url : ''
-      });
-    }
+    });
 
     const result = Object.assign({}, published, {
-      ok: deployResult.ok === true && (!releaseBatch || releaseBatch.ok === true),
-      status: deployResult.ok ? 'pages_deploy_queued' : 'publish_accepted_deploy_failed',
-      pages_deploy: deployResult,
+      ok: runtimeRelease.ok === true,
+      status: runtimeRelease.ok ? 'runtime_release_prepared' : 'publish_accepted_runtime_prepare_failed',
+      pages_deploy: {
+        ok: false,
+        skipped: true,
+        reason: 'GitHub Actions fallback is no longer started by default for Cloudflare Pages sites.'
+      },
       release_status: releaseStatus,
-      release_batch: releaseBatch,
-      warnings: deployResult.ok
-        ? ['Cloudflare runtime принял release; Pages Direct Upload workflow запущен одним batch deploy после накопленных правок.']
-        : ['Cloudflare runtime принял release, но Pages Direct Upload workflow не был запущен.']
+      runtime_release: runtimeRelease,
+      warnings: runtimeRelease.ok
+        ? ['Cloudflare runtime принял release и подготовил batch в R2/D1 без GitHub Actions.']
+        : ['Cloudflare runtime принял release, но runtime batch не был подготовлен. GitHub Actions не запускались.']
     });
 
     refreshReleaseStatusForActiveSite({ silent: true });
