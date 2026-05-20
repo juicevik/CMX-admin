@@ -1193,7 +1193,7 @@
   }
 
   function hostingProvider(profile) {
-    const provider = String(deployProfile(profile).provider || 'static_vps');
+    const provider = String(deployProfile(profile).provider || 'cloudflare_pages');
 
     return provider === 'cloudflare_pages' ? 'cloudflare_pages' : 'static_vps';
   }
@@ -1214,7 +1214,8 @@
       }
 
       const expected = control.getAttribute('data-hosting-provider-action') || '';
-      const disabled = Boolean(profile) && expected !== provider;
+      const allowed = expected.split(/\s+/).filter(Boolean);
+      const disabled = Boolean(profile) && allowed.length > 0 && !allowed.includes(provider);
       control.disabled = disabled;
       control.title = disabled
         ? 'Недоступно для выбранной среды: активный сайт работает в ' + hostingModeLabel(profile) + '.'
@@ -1229,7 +1230,7 @@
   function syncProviderPanels(selector, provider) {
     document.querySelectorAll(selector).forEach((panel) => {
       const expected = panel.getAttribute(selector.slice(1, -1)) || '';
-      const active = expected === provider;
+      const active = expected.split(/\s+/).filter(Boolean).includes(provider);
 
       panel.hidden = !active;
       panel.querySelectorAll('input, select, textarea, button').forEach((control) => {
@@ -1242,14 +1243,14 @@
 
   function syncSiteFleetHostingFields() {
     const field = document.querySelector('[data-site-fleet-deploy-field="provider"]');
-    const provider = field && field.value === 'cloudflare_pages' ? 'cloudflare_pages' : 'static_vps';
+    const provider = field && field.value === 'static_vps' ? 'static_vps' : 'cloudflare_pages';
 
     syncProviderPanels('[data-site-fleet-hosting-panel]', provider);
   }
 
   function syncDomainHostingFields() {
     const field = document.querySelector('[data-domain-hosting-provider-select]');
-    const provider = field && field.value === 'cloudflare_pages' ? 'cloudflare_pages' : 'static_vps';
+    const provider = field && field.value === 'static_vps' ? 'static_vps' : 'cloudflare_pages';
 
     syncProviderPanels('[data-domain-hosting-panel]', provider);
   }
@@ -1542,7 +1543,7 @@
         }
       });
       setSiteFleetField('[data-site-fleet-medgen-field="enabled"]', 'true');
-      setSiteFleetField('[data-site-fleet-deploy-field="provider"]', 'static_vps');
+      setSiteFleetField('[data-site-fleet-deploy-field="provider"]', 'cloudflare_pages');
       syncSiteFleetHostingFields();
       return;
     }
@@ -1559,7 +1560,7 @@
     setSiteFleetField('[data-site-fleet-route-prefix="supplement"]', siteRouteNamespace(profile, 'supplement') || '/bady/');
     setSiteFleetField('[data-site-fleet-route-prefix="author"]', siteRouteNamespace(profile, 'author') || '/experts/');
     setSiteFleetField('[data-site-fleet-route-prefix="article"]', siteRouteNamespace(profile, 'article') || '/guides/');
-    setSiteFleetField('[data-site-fleet-deploy-field="provider"]', profile.deploy_profile && profile.deploy_profile.provider ? profile.deploy_profile.provider : 'static_vps');
+    setSiteFleetField('[data-site-fleet-deploy-field="provider"]', profile.deploy_profile && profile.deploy_profile.provider ? profile.deploy_profile.provider : 'cloudflare_pages');
     setSiteFleetField('[data-site-fleet-deploy-field="public_root"]', profile.deploy_profile && profile.deploy_profile.public_root ? profile.deploy_profile.public_root : '');
     setSiteFleetField('[data-site-fleet-deploy-field="environment"]', profile.deploy_profile && profile.deploy_profile.environment ? profile.deploy_profile.environment : 'production');
     const cloudflare = profile.deploy_profile && profile.deploy_profile.cloudflare && typeof profile.deploy_profile.cloudflare === 'object'
@@ -1580,7 +1581,7 @@
       market: {},
       route_namespaces: {},
       deploy_profile: {
-        provider: 'static_vps',
+        provider: 'cloudflare_pages',
         cloudflare: {},
         secret_refs: {
           ssh_host: 'CMX_PRODUCTION_SSH_HOST',
@@ -3323,7 +3324,7 @@
 
   function collectDomainDeployProfilePayload() {
     const deployTarget = collectDomainDeployTargetPayload();
-    const provider = deployTarget.provider === 'cloudflare_pages' ? 'cloudflare_pages' : 'static_vps';
+    const provider = deployTarget.provider === 'static_vps' ? 'static_vps' : 'cloudflare_pages';
     const profile = {
       provider,
       environment: 'production'
@@ -3338,9 +3339,19 @@
           profile.cloudflare[key] = field.value.trim();
         }
       });
-      profile.public_root = '';
+      profile.public_root = deployTarget.enabled ? (deployTarget.root_path || '') : '';
+      profile.vps_mirror = {
+        enabled: Boolean(deployTarget.enabled),
+        mode: 'static_copy_only',
+        public_root: deployTarget.enabled ? (deployTarget.root_path || '') : ''
+      };
     } else {
       profile.public_root = deployTarget.root_path || '';
+      profile.vps_mirror = {
+        enabled: false,
+        mode: 'static_copy_only',
+        public_root: ''
+      };
     }
 
     return profile;
@@ -3350,9 +3361,9 @@
     const contract = activeAuthContract(authContract);
     const path = siteRebrandEndpoint(contract, dryRun);
     const payload = collectDomainProfilePayload();
-    const provider = payload && payload.deploy_profile && payload.deploy_profile.provider === 'cloudflare_pages'
-      ? 'cloudflare_pages'
-      : 'static_vps';
+    const provider = payload && payload.deploy_profile && payload.deploy_profile.provider === 'static_vps'
+      ? 'static_vps'
+      : 'cloudflare_pages';
 
     if (isGithubMode() && provider === 'cloudflare_pages') {
       if (!dryRun && !window.confirm('Сохранить Cloudflare Pages профиль в Worker/D1 без запуска GitHub Actions?')) {
@@ -4268,7 +4279,7 @@
       'data-site-fleet-save': 'Сохраняет профиль сайта: домен, GEO, deploy и secret_refs.',
       'data-site-fleet-new': 'Очищает форму для нового профиля сайта.',
       'data-site-fleet-archive': 'Архивирует профиль сайта. Публичные файлы не удаляются без отдельного workflow.',
-      'data-domain-hosting-provider-select': 'Выбирает среду установки нового сайта. Для VPS открываются SSH, Ubuntu и SSL. Для Cloudflare открываются Pages, Worker, D1, R2 и KV.',
+      'data-domain-hosting-provider-select': 'Выбирает основную среду нового сайта. По умолчанию это Pages-хостинг; VPS используется только как optional static mirror после отдельного подтверждения.',
       'data-medgen-dry-run': 'Проверяет задачу MedGen без публикации и deploy.',
       'data-medgen-run': 'Быстро создает MedGen task_id и завершает workflow без ожидания генерации.',
       'data-medgen-poll': 'Коротко проверяет ранее созданный task_id. Если задача готова, применяет результат в CMS.',
