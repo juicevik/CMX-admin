@@ -2000,6 +2000,7 @@
       ? profile.deploy_profile.cloudflare
       : {};
     setSiteFleetField('[data-site-fleet-cloudflare-field="pages_project"]', cloudflare.pages_project || '');
+    setSiteFleetField('[data-site-fleet-cloudflare-field="deploy_hook_url"]', cloudflare.deploy_hook_url || '');
     setSiteFleetField('[data-site-fleet-cloudflare-field="worker_script"]', cloudflare.worker_script || 'cmx-panel-api');
     setSiteFleetField('[data-site-fleet-cloudflare-field="d1_database"]', cloudflare.d1_database || 'cmx_panel');
     setSiteFleetField('[data-site-fleet-cloudflare-field="r2_bucket"]', cloudflare.r2_bucket || 'cmx-sites');
