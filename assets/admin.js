@@ -10,7 +10,8 @@
     manifest: null,
     adminUsers: [],
     agentKeys: [],
-    activeSiteId: ''
+    activeSiteId: '',
+    releaseStatusRequestSeq: 0
   };
   const siteContextRequiredPanels = ['main-workspace', 'editorial', 'product-cards', 'medgen', 'design', 'technical', 'content', 'workflow', 'modules', 'system'];
   const siteContextControlSelector = 'button, input, select, textarea';
@@ -806,13 +807,16 @@
     );
 
     if (!approved) {
-      return Object.assign({}, preview, {
+      const result = Object.assign({}, preview, {
         ok: true,
         status: 'preview_ready',
         package: stored,
         target_path: targetPath,
         warnings: ['Пакет сохранен в Cloudflare runtime; публикация ждет approval token. GitHub Actions не запускались.']
       });
+
+      refreshReleaseStatusForActiveSite({ silent: true });
+      return result;
     }
 
     const published = await cloudflarePublish(siteId, {
@@ -834,13 +838,19 @@
       );
     }
 
-    return Object.assign({}, published, {
+    const result = Object.assign({}, published, {
       ok: published.ok && (!sourceSave || sourceSave.ok),
       package: stored,
       preview,
       source_save: sourceSave,
       target_path: targetPath
     });
+
+    if (result.ok) {
+      refreshReleaseStatusForActiveSite({ silent: true });
+    }
+
+    return result;
   }
 
   async function cloudflareArchivePagePackage(relativePath) {
@@ -893,12 +903,15 @@
     );
 
     if (!approved) {
-      return Object.assign({}, preview, {
+      const result = Object.assign({}, preview, {
         ok: true,
         status: 'preview_ready',
         package: stored,
         warnings: ['Архивация остановлена до approval token. GitHub Actions не запускались.']
       });
+
+      refreshReleaseStatusForActiveSite({ silent: true });
+      return result;
     }
 
     const published = await cloudflarePublish(siteId, {
@@ -938,12 +951,18 @@
       }
     }
 
-    return Object.assign({}, published, {
+    const result = Object.assign({}, published, {
       ok: published.ok && (!sourceSave || sourceSave.ok),
       package: stored,
       preview,
       source_save: sourceSave
     });
+
+    if (result.ok) {
+      refreshReleaseStatusForActiveSite({ silent: true });
+    }
+
+    return result;
   }
 
   async function cloudflareUploadMediaFile(file, contentType, alt, area) {
@@ -1476,6 +1495,176 @@
     return fallback;
   }
 
+  function releaseStatusElements() {
+    return {
+      panel: document.querySelector('[data-release-status-panel]'),
+      summary: document.querySelector('[data-release-status-summary]'),
+      counts: document.querySelectorAll('[data-release-status-count]'),
+      packages: document.querySelector('[data-release-status-packages]'),
+      batches: document.querySelector('[data-release-status-batches]'),
+      refresh: document.querySelector('[data-release-status-refresh]')
+    };
+  }
+
+  function resetReleaseStatusView(message, state) {
+    const elements = releaseStatusElements();
+
+    if (!elements.panel) {
+      return;
+    }
+
+    elements.panel.dataset.releaseStatusState = state || 'idle';
+
+    if (elements.summary) {
+      elements.summary.value = message;
+      elements.summary.textContent = message;
+    }
+
+    elements.counts.forEach((node) => {
+      node.textContent = '-';
+    });
+
+    if (elements.packages) {
+      elements.packages.innerHTML = '<li>Пакетов пока нет.</li>';
+    }
+
+    if (elements.batches) {
+      elements.batches.innerHTML = '<li>Batch-релизов пока нет.</li>';
+    }
+  }
+
+  function releaseCount(status, key) {
+    const counts = status && status.content_packages && typeof status.content_packages === 'object'
+      ? status.content_packages
+      : {};
+
+    return Number(counts[key] || 0);
+  }
+
+  function releaseSummaryTitle(item) {
+    const summary = item && item.summary && typeof item.summary === 'object' ? item.summary : {};
+    const title = summary.title || summary.route || summary.target_path || item.request_id || '';
+
+    return String(title || item.package_type || 'package');
+  }
+
+  function renderReleaseItems(list, emptyText, formatter) {
+    if (!list || !Array.isArray(list) || list.length === 0) {
+      return '<li>' + escapeHtml(emptyText) + '</li>';
+    }
+
+    return list.slice(0, 5).map(formatter).join('');
+  }
+
+  function renderReleaseStatus(status) {
+    const elements = releaseStatusElements();
+
+    if (!elements.panel) {
+      return;
+    }
+
+    if (!status || status.ok === false) {
+      const issues = status && Array.isArray(status.issues) ? status.issues.join('; ') : 'release-status endpoint недоступен';
+      resetReleaseStatusView('Release status не загружен: ' + issues, 'error');
+      return;
+    }
+
+    const pending = Number(status.pending_package_count || 0);
+    const counts = {
+      pending,
+      accepted: releaseCount(status, 'accepted'),
+      preview_ready: releaseCount(status, 'preview_ready'),
+      release_queued: releaseCount(status, 'release_queued')
+    };
+    const deployText = pending > 0
+      ? 'К следующему batch deploy готово правок: ' + pending + '.'
+      : 'Новых принятых правок для deploy нет.';
+
+    elements.panel.dataset.releaseStatusState = pending > 0 ? 'pending' : 'clean';
+
+    if (elements.summary) {
+      elements.summary.value = deployText;
+      elements.summary.textContent = deployText;
+    }
+
+    elements.counts.forEach((node) => {
+      const key = node.getAttribute('data-release-status-count') || '';
+      node.textContent = Object.prototype.hasOwnProperty.call(counts, key) ? String(counts[key]) : '-';
+    });
+
+    if (elements.packages) {
+      elements.packages.innerHTML = renderReleaseItems(status.latest_packages, 'Пакетов пока нет.', (item) => {
+        const statusText = item && item.status ? item.status : 'unknown';
+        const type = item && item.package_type ? item.package_type : 'package';
+        return '<li><strong>' + escapeHtml(statusText) + '</strong><span>' + escapeHtml(type + ' · ' + releaseSummaryTitle(item)) + '</span></li>';
+      });
+    }
+
+    if (elements.batches) {
+      elements.batches.innerHTML = renderReleaseItems(status.release_batches, 'Batch-релизов пока нет.', (item) => {
+        const statusText = item && item.status ? item.status : 'queued';
+        const count = Number(item && item.package_count ? item.package_count : 0);
+        const project = item && item.pages_project ? item.pages_project : 'pages';
+        const label = project + ' · ' + count + ' pkg';
+        const url = item && item.workflow_run_url ? String(item.workflow_run_url) : '';
+        const title = url
+          ? '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener">' + escapeHtml(label) + '</a>'
+          : escapeHtml(label);
+
+        return '<li><strong>' + escapeHtml(statusText) + '</strong><span>' + title + '</span></li>';
+      });
+    }
+  }
+
+  async function refreshReleaseStatusForActiveSite(options) {
+    const profile = activeSiteProfile();
+    const elements = releaseStatusElements();
+    const opts = options || {};
+    const requestSeq = ++adminState.releaseStatusRequestSeq;
+
+    if (!elements.panel) {
+      return null;
+    }
+
+    if (!profile) {
+      resetReleaseStatusView('Выберите Cloudflare Pages сайт, чтобы увидеть очередь релиза.', 'idle');
+      return null;
+    }
+
+    if (hostingProvider(profile) !== 'cloudflare_pages') {
+      resetReleaseStatusView('Для VPS mirror release-status не нужен: deploy идет отдельным SSH-потоком.', 'static_vps');
+      return null;
+    }
+
+    const siteId = cloudflareSiteIdFromProfile(profile);
+
+    if (!opts.silent) {
+      resetReleaseStatusView('Загружаю release status для ' + String(profile.domain || siteId) + '...', 'loading');
+    }
+
+    const status = await cloudflareReleaseStatus(siteId);
+
+    if (requestSeq !== adminState.releaseStatusRequestSeq) {
+      return status;
+    }
+
+    renderReleaseStatus(status);
+    return status;
+  }
+
+  function wireReleaseStatusPanel() {
+    const elements = releaseStatusElements();
+
+    if (!elements.refresh || elements.refresh.dataset.releaseStatusBound === 'true') {
+      return;
+    }
+
+    elements.refresh.dataset.releaseStatusBound = 'true';
+    elements.refresh.addEventListener('click', () => {
+      refreshReleaseStatusForActiveSite({ silent: false });
+    });
+  }
+
   function renderSiteWorkflow(manifest) {
     const profiles = siteProfiles(manifest);
     const select = document.querySelector('[data-active-site-select]');
@@ -1518,6 +1707,8 @@
     syncSiteScopedDefaults(profile);
     syncActiveHostingActions(profile);
     syncSiteContextGate(profile, profiles);
+    wireReleaseStatusPanel();
+    refreshReleaseStatusForActiveSite({ silent: true });
   }
 
   function renderSiteFleet(manifest) {
@@ -4321,6 +4512,7 @@
     const helps = {
       'data-site-navigation-validate': 'Проверяет формат меню шапки и подвала без сохранения.',
       'data-site-navigation-apply': 'Сохраняет меню выбранного сайта через GitHub Contents API.',
+      'data-release-status-refresh': 'Показывает, какие правки уже приняты Cloudflare runtime и сколько пакетов уйдет в следующий batch deploy.',
       'data-editorial-media-save': 'Сохраняет изображение страницы или карточки в безопасный media path.',
       'data-editorial-queue-validate': 'Проверяет payload страницы: обязательные поля, route, SEO и безопасный target_path.',
       'data-editorial-publish': 'Сохраняет страницу в GitHub без автоматического запуска Actions.',
@@ -5795,11 +5987,14 @@
     );
 
     if (!approved) {
-      return Object.assign({}, preview, {
+      const result = Object.assign({}, preview, {
         ok: true,
         status: 'preview_ready',
         warnings: ['Публикация остановлена до явного approval token. Actions не запускались.']
       });
+
+      refreshReleaseStatusForActiveSite({ silent: true });
+      return result;
     }
 
     const published = await cloudflarePublish(siteId, {
@@ -5831,7 +6026,7 @@
       });
     }
 
-    return Object.assign({}, published, {
+    const result = Object.assign({}, published, {
       ok: deployResult.ok === true && (!releaseBatch || releaseBatch.ok === true),
       status: deployResult.ok ? 'pages_deploy_queued' : 'publish_accepted_deploy_failed',
       pages_deploy: deployResult,
@@ -5841,6 +6036,9 @@
         ? ['Cloudflare runtime принял release; Pages Direct Upload workflow запущен одним batch deploy после накопленных правок.']
         : ['Cloudflare runtime принял release, но Pages Direct Upload workflow не был запущен.']
     });
+
+    refreshReleaseStatusForActiveSite({ silent: true });
+    return result;
   }
 
   function cloudflareBuildProfile(profile, siteId) {
