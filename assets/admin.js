@@ -811,9 +811,23 @@
       package_storage_key: stored.storage_key || stored.r2_key || ''
     });
 
+    let sourceSave = null;
+
+    if (published.ok) {
+      const current = await githubReadTextFile(targetPath);
+      sourceSave = await githubSaveJsonFile(
+        targetPath,
+        page,
+        'Persist Cloudflare runtime source: ' + targetPath,
+        current.ok ? current.sha : ''
+      );
+    }
+
     return Object.assign({}, published, {
+      ok: published.ok && (!sourceSave || sourceSave.ok),
       package: stored,
       preview,
+      source_save: sourceSave,
       target_path: targetPath
     });
   }
@@ -876,11 +890,48 @@
       });
     }
 
-    return cloudflarePublish(siteId, {
+    const published = await cloudflarePublish(siteId, {
       request_id: requestIdValue,
       approval_token: approved,
       target_path: relativePath,
       package_storage_key: stored.storage_key || stored.r2_key || ''
+    });
+
+    let sourceSave = null;
+
+    if (published.ok) {
+      const current = await githubReadTextFile(relativePath);
+      if (current.ok && current.content) {
+        try {
+          const page = JSON.parse(current.content);
+          page.status = 'archived';
+          page.seo = page.seo && typeof page.seo === 'object' ? page.seo : {};
+          page.seo.robots = 'noindex,nofollow';
+          sourceSave = await githubSaveJsonFile(
+            relativePath,
+            page,
+            'Persist Cloudflare archive source: ' + relativePath,
+            current.sha || ''
+          );
+        } catch (error) {
+          sourceSave = {
+            ok: false,
+            issues: ['Existing page JSON could not be parsed for archive source save.']
+          };
+        }
+      } else {
+        sourceSave = {
+          ok: false,
+          issues: ['Existing page JSON could not be read for archive source save.']
+        };
+      }
+    }
+
+    return Object.assign({}, published, {
+      ok: published.ok && (!sourceSave || sourceSave.ok),
+      package: stored,
+      preview,
+      source_save: sourceSave
     });
   }
 
@@ -5633,14 +5684,14 @@
     }
 
     if (hostingProvider(activeSiteProfile()) !== 'static_vps') {
-      statusSetter('Готовлю Cloudflare preview без GitHub Actions...');
+      statusSetter('Готовлю Cloudflare release и Pages deploy...');
       setStatusBusy('admin-draft-action-status', true);
 
       try {
         const result = await cloudflarePublishActiveSite();
 
         outputSetter(result);
-        statusSetter(result.ok ? 'Cloudflare publish принят Worker runtime.' : 'Cloudflare publish не выполнен.');
+        statusSetter(result.ok ? 'Cloudflare Pages deploy workflow запущен.' : 'Cloudflare publish/deploy не выполнен.');
         return result;
       } finally {
         setStatusBusy('admin-draft-action-status', false);
@@ -5676,6 +5727,15 @@
 
     const deploy = profile && profile.deploy_profile ? profile.deploy_profile : {};
     const cloudflare = deploy && deploy.cloudflare ? deploy.cloudflare : {};
+
+    if (!cloudflare.pages_project) {
+      return {
+        ok: false,
+        issues: ['cloudflare_pages_project_required'],
+        human: 'В активном профиле сайта нужно указать Cloudflare Pages project.'
+      };
+    }
+
     const requestId = 'req-cloudflare-publish-' + Date.now();
     const packagePayload = {
       request_id: requestId,
@@ -5718,11 +5778,47 @@
       });
     }
 
-    return cloudflarePublish(siteId, {
+    const published = await cloudflarePublish(siteId, {
       request_id: requestId,
       approval_token: approved,
       pages_project: cloudflare.pages_project || ''
     });
+
+    if (!published.ok) {
+      return published;
+    }
+
+    const config = readGithubConfig();
+    const workflow = config.cloudflare_pages_publish_workflow_id || 'cloudflare-pages-publish.yml';
+    const deployResult = await githubDispatchWorkflow(workflow, {
+      site_id: siteId,
+      pages_project: cloudflare.pages_project || '',
+      build_profile: cloudflareBuildProfile(profile, siteId),
+      environment: deploy.environment || 'production'
+    }, config.cloudflare_pages_publish_actions_url || '');
+
+    return Object.assign({}, published, {
+      ok: deployResult.ok === true,
+      status: deployResult.ok ? 'pages_deploy_queued' : 'publish_accepted_deploy_failed',
+      pages_deploy: deployResult,
+      warnings: deployResult.ok
+        ? ['Cloudflare runtime принял release; Pages Direct Upload workflow запущен как отдельный build/deploy этап.']
+        : ['Cloudflare runtime принял release, но Pages Direct Upload workflow не был запущен.']
+    });
+  }
+
+  function cloudflareBuildProfile(profile, siteId) {
+    const release = profile && profile.release && typeof profile.release === 'object' ? profile.release : {};
+
+    if (String(release.workflow || '') === 'cloudflare_pages_direct_upload' && siteId === 'workerwp-com') {
+      return 'workerwp-com';
+    }
+
+    if (siteId === 'workerwp-com') {
+      return 'workerwp-com';
+    }
+
+    return 'cms';
   }
 
   async function submitEditorialMedia(contracts, authContract) {
@@ -5867,7 +5963,7 @@
 
       setEditorialOutput(result);
       setEditorialStatus(result.ok
-        ? (result.status === 'preview_ready' ? 'Preview сохранен в Cloudflare. Публикация ждет approval token.' : 'Пакет принят Cloudflare runtime без GitHub Actions.')
+        ? (result.status === 'preview_ready' ? 'Preview сохранен в Cloudflare. Публикация ждет approval token.' : 'Пакет принят Cloudflare runtime, источник сохранен без CI. Для обновления сайта нажмите «Собрать и деплой».')
         : 'Cloudflare runtime вернул ошибку.');
 
       return result;
@@ -6574,7 +6670,7 @@
 
       setProductCardOutput(result);
       setProductCardStatus(result.ok
-        ? (result.status === 'preview_ready' ? 'Preview карточки сохранен в Cloudflare. Публикация ждет approval token.' : 'Карточка принята Cloudflare runtime без GitHub Actions.')
+        ? (result.status === 'preview_ready' ? 'Preview карточки сохранен в Cloudflare. Публикация ждет approval token.' : 'Карточка принята Cloudflare runtime, источник сохранен без CI. Для обновления сайта нажмите «Собрать и деплой».')
         : 'Cloudflare runtime вернул ошибку карточки.');
 
       return result;
