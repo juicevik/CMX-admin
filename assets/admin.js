@@ -700,6 +700,17 @@
     });
   }
 
+  async function cloudflareReleaseStatus(siteId) {
+    return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/release-status');
+  }
+
+  async function cloudflareCreateReleaseBatch(siteId, payload) {
+    return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/release-batches', {
+      method: 'POST',
+      body: JSON.stringify(Object.assign({}, payload || {}, { site_id: siteId }))
+    });
+  }
+
   function cloudflareRuntimeForActiveSite() {
     return isGithubMode()
       && cloudflareRuntimeEnabled()
@@ -4313,7 +4324,7 @@
       'data-editorial-media-save': 'Сохраняет изображение страницы или карточки в безопасный media path.',
       'data-editorial-queue-validate': 'Проверяет payload страницы: обязательные поля, route, SEO и безопасный target_path.',
       'data-editorial-publish': 'Сохраняет страницу в GitHub без автоматического запуска Actions.',
-      'data-github-static-deploy': 'Запускает отдельную сборку и deploy статического сайта для выбранного домена.',
+      'data-github-static-deploy': 'Запускает один batch build/deploy для всех накопленных правок выбранного домена. Если новых правок нет, админка спросит подтверждение и не потратит Actions случайно.',
       'data-editorial-archive-submit': 'Архивирует выбранную страницу или карточку после проверки прав и target_path.',
       'data-product-card-media-save': 'Сохраняет фото товара для карточки и страницы продукта.',
       'data-product-card-validate': 'Проверяет карточку товара перед сохранением.',
@@ -5736,6 +5747,18 @@
       };
     }
 
+    const releaseStatus = await cloudflareReleaseStatus(siteId);
+    const pendingPackageCount = releaseStatus && releaseStatus.ok ? Number(releaseStatus.pending_package_count || 0) : null;
+
+    if (pendingPackageCount === 0 && !window.confirm('Cloudflare runtime не видит новых опубликованных правок для деплоя. Всё равно запустить Pages build/deploy?')) {
+      return {
+        ok: true,
+        status: 'no_changes_to_deploy',
+        release_status: releaseStatus,
+        warnings: ['Deploy не запускался: нет pending правок, Actions не расходуются.']
+      };
+    }
+
     const requestId = 'req-cloudflare-publish-' + Date.now();
     const packagePayload = {
       request_id: requestId,
@@ -5745,7 +5768,8 @@
         domain: profile.domain || '',
         base_url: profile.base_url || '',
         pages_project: cloudflare.pages_project || '',
-        provider: 'cloudflare_pages'
+        provider: 'cloudflare_pages',
+        pending_package_count: pendingPackageCount
       },
       profile
     };
@@ -5796,13 +5820,25 @@
       build_profile: cloudflareBuildProfile(profile, siteId),
       environment: deploy.environment || 'production'
     }, config.cloudflare_pages_publish_actions_url || '');
+    let releaseBatch = null;
+
+    if (deployResult.ok) {
+      releaseBatch = await cloudflareCreateReleaseBatch(siteId, {
+        request_id: 'batch-cloudflare-pages-' + Date.now(),
+        pages_project: cloudflare.pages_project || '',
+        workflow,
+        workflow_run_url: deployResult.data && deployResult.data.actions_url ? deployResult.data.actions_url : ''
+      });
+    }
 
     return Object.assign({}, published, {
-      ok: deployResult.ok === true,
+      ok: deployResult.ok === true && (!releaseBatch || releaseBatch.ok === true),
       status: deployResult.ok ? 'pages_deploy_queued' : 'publish_accepted_deploy_failed',
       pages_deploy: deployResult,
+      release_status: releaseStatus,
+      release_batch: releaseBatch,
       warnings: deployResult.ok
-        ? ['Cloudflare runtime принял release; Pages Direct Upload workflow запущен как отдельный build/deploy этап.']
+        ? ['Cloudflare runtime принял release; Pages Direct Upload workflow запущен одним batch deploy после накопленных правок.']
         : ['Cloudflare runtime принял release, но Pages Direct Upload workflow не был запущен.']
     });
   }
