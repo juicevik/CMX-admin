@@ -726,6 +726,10 @@
     });
   }
 
+  async function cloudflarePagesDeployments(siteId) {
+    return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/pages-deployments');
+  }
+
   function cloudflareRuntimeForActiveSite() {
     return isGithubMode()
       && cloudflareRuntimeEnabled()
@@ -1516,6 +1520,7 @@
       counts: document.querySelectorAll('[data-release-status-count]'),
       packages: document.querySelector('[data-release-status-packages]'),
       batches: document.querySelector('[data-release-status-batches]'),
+      deployments: document.querySelector('[data-release-status-deployments]'),
       refresh: document.querySelector('[data-release-status-refresh]'),
       prepare: document.querySelector('[data-runtime-release-prepare]'),
       deploy: document.querySelector('[data-cloudflare-pages-deploy]')
@@ -1547,6 +1552,10 @@
     if (elements.batches) {
       elements.batches.innerHTML = '<li>Batch-релизов пока нет.</li>';
     }
+
+    if (elements.deployments) {
+      elements.deployments.innerHTML = '<li>Cloudflare Pages deploy пока не запускался.</li>';
+    }
   }
 
   function releaseCount(status, key) {
@@ -1572,6 +1581,13 @@
     return list.slice(0, 5).map(formatter).join('');
   }
 
+  function normalizeDeploymentStatus(status) {
+    return String(status || '')
+      .replace(/^cloudflare_pages_/, '')
+      .replace(/^deploy_/, '')
+      .replace(/_/g, ' ');
+  }
+
   function renderReleaseStatus(status) {
     const elements = releaseStatusElements();
 
@@ -1592,12 +1608,21 @@
       preview_ready: releaseCount(status, 'preview_ready'),
       release_prepared: releaseCount(status, 'release_prepared'),
       pages_deploy_requested: releaseCount(status, 'pages_deploy_requested'),
+      deployed: releaseCount(status, 'deployed'),
+      pages_deploy_failed: releaseCount(status, 'pages_deploy_failed'),
       release_queued: releaseCount(status, 'release_queued')
     };
     const prepared = Number(status.prepared_package_count || counts.release_prepared || 0);
+    const latestDeployment = status.pages_deployments && status.pages_deployments.length > 0
+      ? status.pages_deployments[0]
+      : null;
     const deployText = pending > 0
       ? 'К runtime release готово правок: ' + pending + '.'
-      : (prepared > 0 ? 'Runtime release подготовлен: ' + prepared + ' пакетов ждут publish-адаптер.' : 'Новых принятых правок для deploy нет.');
+      : (prepared > 0
+        ? 'Runtime release подготовлен: ' + prepared + ' пакетов ждут publish-адаптер.'
+        : (latestDeployment
+          ? 'Последний Cloudflare Pages deploy: ' + normalizeDeploymentStatus(latestDeployment.status) + '.'
+          : 'Новых принятых правок для deploy нет.'));
 
     elements.panel.dataset.releaseStatusState = pending > 0 ? 'pending' : (prepared > 0 ? 'prepared' : 'clean');
 
@@ -1633,6 +1658,23 @@
         return '<li><strong>' + escapeHtml(statusText) + '</strong><span>' + title + '</span></li>';
       });
     }
+
+    if (elements.deployments) {
+      elements.deployments.innerHTML = renderReleaseItems(status.pages_deployments, 'Cloudflare Pages deploy пока не запускался.', (item) => {
+        const statusText = normalizeDeploymentStatus(item && item.status ? item.status : 'unknown');
+        const project = item && item.pages_project ? item.pages_project : 'pages';
+        const count = Number(item && item.package_count ? item.package_count : 0);
+        const deploymentUrl = item && item.deployment_url ? String(item.deployment_url) : '';
+        const stage = item && item.cloudflare_stage ? ' · ' + String(item.cloudflare_stage) : '';
+        const error = item && item.sync_error ? ' · ' + String(item.sync_error) : '';
+        const label = project + ' · ' + count + ' pkg' + stage + error;
+        const title = deploymentUrl
+          ? '<a href="' + escapeHtml(deploymentUrl) + '" target="_blank" rel="noopener">' + escapeHtml(label) + '</a>'
+          : escapeHtml(label);
+
+        return '<li><strong>' + escapeHtml(statusText) + '</strong><span>' + title + '</span></li>';
+      });
+    }
   }
 
   async function refreshReleaseStatusForActiveSite(options) {
@@ -1662,9 +1704,19 @@
     }
 
     const status = await cloudflareReleaseStatus(siteId);
+    const deployments = await cloudflarePagesDeployments(siteId).catch((error) => ({
+      ok: false,
+      issues: [error && error.message ? error.message : 'pages deployment status unavailable'],
+      deployments: []
+    }));
 
     if (requestSeq !== adminState.releaseStatusRequestSeq) {
       return status;
+    }
+
+    if (status && status.ok && deployments && deployments.ok) {
+      status.pages_deployments = deployments.deployments || [];
+      status.pages_deployments_sync_available = deployments.sync_available === true;
     }
 
     renderReleaseStatus(status);
