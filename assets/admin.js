@@ -13,6 +13,7 @@
     activeSiteId: '',
     releaseStatusRequestSeq: 0,
     directUploadBundlesBySite: {},
+    directUploadApprovalsBySite: {},
     medgenStatusBySite: {}
   };
   const siteContextRequiredPanels = ['main-workspace', 'editorial', 'product-cards', 'medgen', 'design', 'technical', 'content', 'workflow', 'modules', 'system'];
@@ -2216,11 +2217,24 @@
     };
   }
 
+  async function sha256Hex(text) {
+    if (!window.crypto || !window.crypto.subtle || typeof TextEncoder === 'undefined') {
+      return 'sha256-unavailable-' + String(text || '').length;
+    }
+
+    const bytes = new TextEncoder().encode(String(text || ''));
+    const digest = await window.crypto.subtle.digest('SHA-256', bytes);
+
+    return Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('');
+  }
+
   function activeSiteDirectUploadKey() {
     return activeSiteKey() || cloudflareSiteIdFromProfile(activeSiteProfile()) || '';
   }
 
-  function previewDirectUploadBundle() {
+  async function previewDirectUploadBundle() {
     const elements = releaseStatusElements();
     const siteKey = activeSiteDirectUploadKey();
 
@@ -2235,10 +2249,17 @@
     }
 
     try {
-      const bundle = parseDirectUploadBundle(String(elements.directUploadJson.value || ''));
+      const raw = String(elements.directUploadJson.value || '');
+      const bundle = parseDirectUploadBundle(raw);
       const summary = summarizeDirectUploadBundle(bundle);
+      const payloadHash = await sha256Hex(raw);
       adminState.directUploadBundlesBySite[siteKey] = bundle;
-      setDirectUploadStatus(summary.text, 'ready', true);
+      adminState.directUploadApprovalsBySite[siteKey] = {
+        payload_hash: payloadHash,
+        previewed_at: new Date().toISOString(),
+        summary
+      };
+      setDirectUploadStatus(summary.text + ' payload sha256 ' + payloadHash.slice(0, 16) + '.', 'ready', true);
       return bundle;
     } catch (error) {
       setDirectUploadStatus(error && error.message ? error.message : String(error), 'error', false);
@@ -2250,7 +2271,7 @@
     const profile = activeSiteProfile();
     const siteKey = activeSiteDirectUploadKey();
     const elements = releaseStatusElements();
-    const bundle = adminState.directUploadBundlesBySite[siteKey] || previewDirectUploadBundle();
+    const bundle = adminState.directUploadBundlesBySite[siteKey] || await previewDirectUploadBundle();
 
     if (!bundle || !profile || hostingProvider(profile) !== 'cloudflare_pages') {
       setDirectUploadStatus('Direct Upload bundle доступен только для выбранного Cloudflare Pages сайта.', 'error', false);
@@ -2261,10 +2282,16 @@
     const deploy = profile && profile.deploy_profile ? profile.deploy_profile : {};
     const cloudflare = deploy && deploy.cloudflare ? deploy.cloudflare : {};
     const summary = summarizeDirectUploadBundle(bundle);
+    const approval = adminState.directUploadApprovalsBySite[siteKey] || null;
 
     if (!siteId || !cloudflare.pages_project) {
       setDirectUploadStatus('Для deploy нужен активный site_id и pages_project.', 'error', false);
       return { ok: false, issues: ['site_context_or_pages_project_required'] };
+    }
+
+    if (!approval || !approval.payload_hash) {
+      setDirectUploadStatus('Сначала выполните preview bundle и согласуйте payload sha256.', 'error', false);
+      return { ok: false, issues: ['direct_upload_preview_required'] };
     }
 
     setDirectUploadStatus('Отправляю bundle в Cloudflare Worker без GitHub Actions...', 'loading', false);
@@ -2274,7 +2301,13 @@
       request_id: bundle.request_id || 'pages-direct-' + Date.now(),
       pages_project: cloudflare.pages_project || bundle.pages_project || '',
       branch: cloudflare.branch || bundle.branch || '',
-      source: 'admin_prebuilt_bundle'
+      source: 'admin_prebuilt_bundle',
+      approval: Object.assign({}, bundle.approval || {}, {
+        accepted: true,
+        payload_hash: approval.payload_hash,
+        preview_source: 'admin_direct_upload_bundle',
+        previewed_at: approval.previewed_at || ''
+      })
     });
     const result = await cloudflareRequestPagesDeployment(siteId, payload);
 
@@ -2335,7 +2368,7 @@
           if (elements.directUploadJson) {
             elements.directUploadJson.value = text;
           }
-          previewDirectUploadBundle();
+          await previewDirectUploadBundle();
         } catch (error) {
           setDirectUploadStatus('Файл bundle не прочитан: ' + (error && error.message ? error.message : String(error)), 'error', false);
         }
@@ -2344,8 +2377,8 @@
 
     if (elements.directUploadPreview && elements.directUploadPreview.dataset.directUploadPreviewBound !== 'true') {
       elements.directUploadPreview.dataset.directUploadPreviewBound = 'true';
-      elements.directUploadPreview.addEventListener('click', () => {
-        previewDirectUploadBundle();
+      elements.directUploadPreview.addEventListener('click', async () => {
+        await previewDirectUploadBundle();
       });
     }
 
