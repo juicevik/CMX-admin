@@ -3405,6 +3405,114 @@ body[data-site-context="missing"] .site-workflow__active select {
   font-weight: 800;
 }
 
+.medgen-task-monitor,
+.medgen-preview-pages {
+  margin: var(--admin-space-4) 0;
+  padding: var(--admin-space-3);
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-card);
+  background: var(--admin-surface-soft);
+}
+
+.medgen-task-monitor__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--admin-space-2);
+  align-items: center;
+  margin-bottom: var(--admin-space-3);
+  color: var(--admin-muted);
+  font-size: 0.82rem;
+  font-weight: 820;
+}
+
+.medgen-task-monitor__summary strong {
+  color: var(--admin-text);
+  font-size: 0.96rem;
+}
+
+.medgen-task-monitor__summary span {
+  padding: 0.2rem 0.48rem;
+  border: 1px solid var(--admin-border);
+  border-radius: 999px;
+  background: var(--admin-surface);
+}
+
+.medgen-task-monitor__list {
+  display: grid;
+  gap: var(--admin-space-2);
+  max-height: 23rem;
+  overflow: auto;
+  padding-right: 0.2rem;
+}
+
+.medgen-task-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  gap: var(--admin-space-3);
+  align-items: center;
+  min-width: 0;
+  padding: 0.72rem 0.82rem;
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-control);
+  background: var(--admin-surface);
+}
+
+.medgen-task-row__lamp {
+  width: 0.58rem;
+  height: 0.58rem;
+  border-radius: 999px;
+  background: var(--admin-warning);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--admin-warning) 16%, transparent);
+}
+
+.medgen-task-row[data-medgen-task-state="ready"] .medgen-task-row__lamp {
+  background: var(--admin-success);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--admin-success) 15%, transparent);
+}
+
+.medgen-task-row[data-medgen-task-state="failed"] .medgen-task-row__lamp {
+  background: #d3423f;
+  box-shadow: 0 0 0 4px color-mix(in srgb, #d3423f 14%, transparent);
+}
+
+.medgen-task-row h4 {
+  margin: 0;
+  color: var(--admin-text);
+  font-size: 0.88rem;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.medgen-task-row p {
+  margin: 0.18rem 0 0;
+  color: var(--admin-muted);
+  font-size: 0.72rem;
+  font-weight: 760;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.medgen-task-row strong,
+.medgen-task-row small {
+  color: var(--admin-muted);
+  font-size: 0.74rem;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.medgen-task-row button {
+  min-height: 2rem;
+  padding: 0 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--admin-accent) 48%, var(--admin-border));
+  border-radius: var(--admin-radius-control);
+  background: color-mix(in srgb, var(--admin-accent) 10%, var(--admin-surface));
+  color: var(--admin-accent-strong);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
 .domain-design__grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -4088,6 +4196,17 @@ body[data-site-context="missing"] .site-workflow__active select {
 
   .metric--github-rate {
     grid-column: auto;
+  }
+
+  .medgen-task-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .medgen-task-row strong,
+  .medgen-task-row small,
+  .medgen-task-row button {
+    grid-column: 2;
+    white-space: normal;
   }
 
   .account-toggle {
