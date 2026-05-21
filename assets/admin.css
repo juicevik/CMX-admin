@@ -3033,6 +3033,39 @@ body[data-site-context="missing"] .site-workflow__active select {
   color: var(--admin-text);
 }
 
+.site-workflow__runtime-index {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--admin-space-3);
+  align-items: end;
+  padding: var(--admin-space-3);
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-control);
+  background: color-mix(in srgb, var(--admin-surface-muted) 58%, transparent);
+}
+
+.site-workflow__runtime-index > div {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.site-workflow__runtime-index output {
+  min-height: 2.1rem;
+  overflow-wrap: anywhere;
+}
+
+.site-workflow__runtime-index output[data-runtime-index-state="ready"] {
+  border-color: color-mix(in srgb, #20b26b 45%, var(--admin-border));
+  color: var(--admin-text);
+}
+
+.site-workflow__runtime-index output[data-runtime-index-state="error"],
+.site-workflow__runtime-index output[data-runtime-index-state="blocked"] {
+  border-color: color-mix(in srgb, #d94747 48%, var(--admin-border));
+  color: var(--admin-danger);
+}
+
 .site-workflow__release-counts,
 .site-workflow__release-lists {
   display: grid;
@@ -3924,6 +3957,7 @@ body[data-site-context="missing"] .site-workflow__active select {
   .site-workflow__stage-widgets,
   .site-workflow__release-counts,
   .site-workflow__release-lists,
+  .site-workflow__runtime-index,
   .site-workflow__direct-upload-grid,
   .site-fleet-cards {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3983,6 +4017,7 @@ body[data-site-context="missing"] .site-workflow__active select {
   .site-workflow__stage-widgets,
   .site-workflow__release-counts,
   .site-workflow__release-lists,
+  .site-workflow__runtime-index,
   .site-workflow__direct-upload-grid,
   .site-workflow__steps,
   .site-fleet-cards {

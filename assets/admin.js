@@ -804,6 +804,55 @@
     return key ? Boolean(adminState.runtimeContentIndexLoadingBySite[key]) : false;
   }
 
+  function runtimeContentIndexCounts(payload) {
+    const contentIndex = payload && payload.content_index && typeof payload.content_index === 'object'
+      ? payload.content_index
+      : {};
+    const sourceCounts = contentIndex.source_counts && typeof contentIndex.source_counts === 'object'
+      ? contentIndex.source_counts
+      : payload && payload.source_counts && typeof payload.source_counts === 'object'
+        ? payload.source_counts
+        : {};
+
+    return {
+      configured: Number(contentIndex.configured_pages || payload && payload.configured_pages || 0),
+      matched: Number(contentIndex.matched_pages || payload && payload.matched_pages || 0),
+      published: Number(sourceCounts.published_objects || 0),
+      packages: Number(sourceCounts.content_packages || 0),
+      pages: Array.isArray(payload && payload.pages) ? payload.pages.length : 0,
+      contracts: Array.isArray(payload && payload.action_contract_pages) ? payload.action_contract_pages.length : 0
+    };
+  }
+
+  function runtimeContentIndexHasBaseline(payload) {
+    const counts = runtimeContentIndexCounts(payload || {});
+
+    return counts.published > 0;
+  }
+
+  function runtimeContentIndexSummary(payload) {
+    if (!payload || payload.ok === false) {
+      return 'Runtime content-index не загружен.';
+    }
+
+    const counts = runtimeContentIndexCounts(payload);
+    return 'Runtime index: ' + counts.matched + '/' + counts.configured
+      + ' страниц, baseline ' + counts.published
+      + ', packages ' + counts.packages + '.';
+  }
+
+  function setRuntimeIndexStatus(message, state) {
+    const elements = releaseStatusElements();
+
+    if (!elements.runtimeIndexStatus) {
+      return;
+    }
+
+    elements.runtimeIndexStatus.value = message;
+    elements.runtimeIndexStatus.textContent = message;
+    elements.runtimeIndexStatus.dataset.runtimeIndexState = state || 'idle';
+  }
+
   function mergeRuntimeContentIndex(siteId, payload) {
     const siteKey = String(siteId || '').trim();
 
@@ -901,8 +950,12 @@
     if (payload && payload.ok) {
       mergeRuntimeContentIndex(siteId, payload);
       rerenderSiteScopedContent();
+      setRuntimeIndexStatus(runtimeContentIndexSummary(payload), runtimeContentIndexHasBaseline(payload) ? 'ready' : 'blocked');
     } else if (!opts.silent) {
+      setRuntimeIndexStatus('Runtime content-index не загружен. Проверьте Worker/API для выбранного сайта.', 'error');
       renderPages(scopedPagesList((adminState.manifest || {}).pages || []));
+    } else if (payload && payload.ok === false) {
+      setRuntimeIndexStatus('Runtime content-index не загружен для выбранного сайта.', 'error');
     }
 
     return payload;
@@ -1838,6 +1891,8 @@
       refresh: document.querySelector('[data-release-status-refresh]'),
       prepare: document.querySelector('[data-runtime-release-prepare]'),
       deploy: document.querySelector('[data-cloudflare-pages-deploy]'),
+      runtimeIndexRefresh: document.querySelector('[data-runtime-index-refresh]'),
+      runtimeIndexStatus: document.querySelector('[data-runtime-index-status]'),
       directUploadFile: document.querySelector('[data-direct-upload-file]'),
       directUploadJson: document.querySelector('[data-direct-upload-json]'),
       directUploadPreview: document.querySelector('[data-direct-upload-preview]'),
@@ -2610,6 +2665,7 @@
       const index = await cloudflareRuntimeContentIndex(siteKey);
       if (index && index.ok) {
         mergeRuntimeContentIndex(siteKey, index);
+        setRuntimeIndexStatus(runtimeContentIndexSummary(index), runtimeContentIndexHasBaseline(index) ? 'ready' : 'blocked');
         rerenderSiteScopedContent();
       }
     } else {
@@ -2716,6 +2772,37 @@
     return activeSiteKey() || cloudflareSiteIdFromProfile(activeSiteProfile()) || '';
   }
 
+  async function ensureRuntimeIndexReadyForDirectUpload() {
+    const siteKey = activeSiteDirectUploadKey();
+    let payload = siteKey ? adminState.runtimeContentIndexesBySite[siteKey] : null;
+
+    if (!siteKey) {
+      setRuntimeIndexStatus('Сначала выберите Cloudflare Pages сайт.', 'blocked');
+      setDirectUploadStatus('Сначала выберите Cloudflare Pages сайт.', 'error', false);
+      return false;
+    }
+
+    if (!payload) {
+      setRuntimeIndexStatus('Проверяю runtime content-index выбранного сайта...', 'loading');
+      payload = await refreshRuntimeContentIndexForActiveSite({ silent: true });
+    }
+
+    if (!payload || payload.ok === false) {
+      setRuntimeIndexStatus('Runtime content-index не загружен. Direct Upload остановлен.', 'error');
+      setDirectUploadStatus('Direct Upload остановлен: сначала загрузите runtime content-index выбранного сайта.', 'error', false);
+      return false;
+    }
+
+    if (!runtimeContentIndexHasBaseline(payload)) {
+      setRuntimeIndexStatus(runtimeContentIndexSummary(payload) + ' Сначала загрузите baseline.', 'blocked');
+      setDirectUploadStatus('Direct Upload остановлен: baseline выбранного сайта еще не загружен в Worker/R2/D1.', 'error', false);
+      return false;
+    }
+
+    setRuntimeIndexStatus(runtimeContentIndexSummary(payload), 'ready');
+    return true;
+  }
+
   async function previewDirectUploadBundle() {
     const elements = releaseStatusElements();
     const siteKey = activeSiteDirectUploadKey();
@@ -2731,6 +2818,11 @@
     }
 
     try {
+      const runtimeReady = await ensureRuntimeIndexReadyForDirectUpload();
+      if (!runtimeReady) {
+        return null;
+      }
+
       const raw = String(elements.directUploadJson.value || '');
       const bundle = parseDirectUploadBundle(raw);
       const summary = summarizeDirectUploadBundle(bundle);
@@ -2776,6 +2868,11 @@
       return { ok: false, issues: ['direct_upload_preview_required'] };
     }
 
+    const runtimeReady = await ensureRuntimeIndexReadyForDirectUpload();
+    if (!runtimeReady) {
+      return { ok: false, issues: ['runtime_content_index_not_ready'] };
+    }
+
     setDirectUploadStatus('Отправляю bundle в Cloudflare Worker без GitHub Actions...', 'loading', false);
     resetReleaseStatusView('Отправляю prebuilt bundle в Cloudflare Pages Direct Upload...', 'loading');
 
@@ -2794,8 +2891,14 @@
     const result = await cloudflareRequestPagesDeployment(siteId, payload);
 
     if (result && result.ok) {
-      setDirectUploadStatus('Bundle опубликован: ' + summary.files + ' файлов. GitHub Actions не запускались.', 'done', true);
-      resetReleaseStatusView('Cloudflare Pages Direct Upload запрошен: ' + summary.files + ' файлов.', 'prepared');
+      const deploymentUrl = result.deployment_url ? ' URL: ' + result.deployment_url : '';
+      const message = result.idempotent
+        ? 'Deploy bundle уже был создан ранее. Повторный upload не запускался.' + deploymentUrl
+        : 'Bundle опубликован: ' + summary.files + ' файлов. GitHub Actions не запускались.' + deploymentUrl;
+      setDirectUploadStatus(message, 'done', true);
+      resetReleaseStatusView(result.idempotent
+        ? 'Cloudflare Pages Direct Upload уже существует для этого request_id.'
+        : 'Cloudflare Pages Direct Upload запрошен: ' + summary.files + ' файлов.', 'prepared');
     } else {
       const issues = result && Array.isArray(result.issues) ? result.issues.join('; ') : 'pages deployment endpoint недоступен';
       setDirectUploadStatus('Deploy bundle не выполнен: ' + issues, 'error', true);
@@ -2812,6 +2915,7 @@
     if (!elements.refresh
       && !elements.prepare
       && !elements.deploy
+      && !elements.runtimeIndexRefresh
       && !elements.directUploadPreview
       && !elements.directUploadDeploy
       && !elements.baselineGenerate
@@ -2838,6 +2942,17 @@
       elements.deploy.dataset.cloudflarePagesDeployBound = 'true';
       elements.deploy.addEventListener('click', () => {
         requestCloudflarePagesDeployForActiveSite();
+      });
+    }
+
+    if (elements.runtimeIndexRefresh && elements.runtimeIndexRefresh.dataset.runtimeIndexRefreshBound !== 'true') {
+      elements.runtimeIndexRefresh.dataset.runtimeIndexRefreshBound = 'true';
+      elements.runtimeIndexRefresh.addEventListener('click', async () => {
+        setRuntimeIndexStatus('Проверяю runtime content-index выбранного сайта...', 'loading');
+        const payload = await refreshRuntimeContentIndexForActiveSite({ silent: false });
+        if (payload && payload.ok) {
+          setRuntimeIndexStatus(runtimeContentIndexSummary(payload), runtimeContentIndexHasBaseline(payload) ? 'ready' : 'blocked');
+        }
       });
     }
 
@@ -2979,9 +3094,17 @@
     wireReleaseStatusPanel();
     if (!profile) {
       setBaselineStatus('Выберите Cloudflare Pages сайт перед baseline.', 'idle', false);
+      setRuntimeIndexStatus('Выберите сайт и проверьте runtime index перед Direct Upload.', 'idle');
     } else if (hostingProvider(profile) !== 'cloudflare_pages') {
       setBaselineStatus('Baseline нужен только для Cloudflare Pages runtime.', 'idle', false);
+      setRuntimeIndexStatus('Runtime content-index нужен только для Cloudflare Pages сайтов.', 'idle');
+    } else {
+      const cachedIndex = adminState.runtimeContentIndexesBySite[String(profile.site_id || '')] || null;
+      setRuntimeIndexStatus(cachedIndex
+        ? runtimeContentIndexSummary(cachedIndex)
+        : 'Runtime content-index еще не проверен для выбранного сайта.', cachedIndex && runtimeContentIndexHasBaseline(cachedIndex) ? 'ready' : 'idle');
     }
+    refreshRuntimeContentIndexForActiveSite({ silent: true });
     refreshReleaseStatusForActiveSite({ silent: true });
   }
 
