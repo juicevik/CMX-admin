@@ -12,6 +12,9 @@
     agentKeys: [],
     activeSiteId: '',
     releaseStatusRequestSeq: 0,
+    runtimeContentIndexRequestSeq: 0,
+    runtimeContentIndexesBySite: {},
+    runtimeContentIndexLoadingBySite: {},
     directUploadBundlesBySite: {},
     directUploadApprovalsBySite: {},
     medgenStatusBySite: {}
@@ -764,10 +767,136 @@
     return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/pages-deployments');
   }
 
+  async function cloudflareRuntimeContentIndex(siteId) {
+    return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/content-index');
+  }
+
   function cloudflareRuntimeForActiveSite() {
     return isGithubMode()
       && cloudflareRuntimeEnabled()
       && hostingProvider(activeSiteProfile()) === 'cloudflare_pages';
+  }
+
+  function runtimeContentIndexRequired(profile) {
+    const currentProfile = profile || activeSiteProfile();
+    const index = currentProfile && currentProfile.content_index && typeof currentProfile.content_index === 'object'
+      ? currentProfile.content_index
+      : {};
+
+    return isGithubMode()
+      && cloudflareRuntimeEnabled()
+      && hostingProvider(currentProfile) === 'cloudflare_pages'
+      && String(index.mode || 'cloudflare_runtime_content') === 'cloudflare_runtime_content';
+  }
+
+  function runtimeContentIndexLoading(siteId) {
+    const key = String(siteId || adminState.activeSiteId || '').trim();
+
+    return key ? Boolean(adminState.runtimeContentIndexLoadingBySite[key]) : false;
+  }
+
+  function mergeRuntimeContentIndex(siteId, payload) {
+    const siteKey = String(siteId || '').trim();
+
+    if (!siteKey || !payload || payload.ok === false) {
+      return false;
+    }
+
+    const pages = Array.isArray(payload.pages) ? payload.pages : [];
+    const contractPages = Array.isArray(payload.action_contract_pages) ? payload.action_contract_pages : [];
+    const contentIndex = payload.content_index && typeof payload.content_index === 'object'
+      ? payload.content_index
+      : null;
+    const manifest = adminState.manifest || {};
+    const contracts = adminState.actionContracts || {};
+
+    adminState.runtimeContentIndexesBySite[siteKey] = payload;
+
+    manifest.pages = [
+      ...(Array.isArray(manifest.pages) ? manifest.pages : []).filter((page) => itemSiteId(page) !== siteKey),
+      ...pages.map((page) => Object.assign({ site_id: siteKey, runtime_source: 'cloudflare_runtime' }, page || {}))
+    ];
+
+    if (contentIndex) {
+      const indexes = Array.isArray(manifest.content_indexes) ? manifest.content_indexes : [];
+      manifest.content_indexes = [
+        ...indexes.filter((index) => String(index && index.site_id ? index.site_id : '') !== siteKey),
+        contentIndex
+      ];
+
+      if (Array.isArray(manifest.sites)) {
+        manifest.sites = manifest.sites.map((site) => {
+          if (String(site && site.site_id ? site.site_id : '') !== siteKey) {
+            return site;
+          }
+
+          return Object.assign({}, site, { content_index: contentIndex });
+        });
+      }
+    }
+
+    if (Array.isArray(contracts.pages)) {
+      contracts.pages = [
+        ...contracts.pages.filter((page) => itemSiteId(page) !== siteKey),
+        ...contractPages.map((page) => Object.assign({ site_id: siteKey, runtime_source: 'cloudflare_runtime' }, page || {}))
+      ];
+    }
+
+    return true;
+  }
+
+  function rerenderSiteScopedContent() {
+    renderAdminMetrics(adminState.manifest || {});
+    setSectionCounts(adminState.manifest || {}, adminState.actionContracts || {});
+    renderPages(scopedPagesList((adminState.manifest || {}).pages || []));
+
+    if (!adminState.actionContracts) {
+      return;
+    }
+
+    fillEditorialPageSelects(adminState.actionContracts);
+    fillProductCardPageSelect(adminState.actionContracts);
+    refreshPageSelect(adminState.actionContracts);
+    renderWorkflowPages(adminState.actionContracts);
+    renderEditorialMatrix(adminState.actionContracts);
+    renderEditorialLinking(adminState.actionContracts);
+    setEditorialOutput(currentEditorialPayload(adminState.actionContracts));
+    renderProductCardMatrix(adminState.actionContracts);
+    renderProductCardFieldInputs(adminState.actionContracts);
+    setProductCardOutput(currentProductCardPayload(adminState.actionContracts));
+  }
+
+  async function refreshRuntimeContentIndexForActiveSite(options) {
+    const opts = options || {};
+    const profile = activeSiteProfile();
+    const siteId = profile && profile.site_id ? String(profile.site_id) : '';
+
+    if (!siteId || !runtimeContentIndexRequired(profile)) {
+      return null;
+    }
+
+    const requestSeq = adminState.runtimeContentIndexRequestSeq + 1;
+    adminState.runtimeContentIndexRequestSeq = requestSeq;
+    adminState.runtimeContentIndexLoadingBySite[siteId] = true;
+    renderPages(scopedPagesList((adminState.manifest || {}).pages || []));
+
+    const payload = await cloudflareRuntimeContentIndex(siteId);
+
+    if (requestSeq !== adminState.runtimeContentIndexRequestSeq || siteId !== adminState.activeSiteId) {
+      adminState.runtimeContentIndexLoadingBySite[siteId] = false;
+      return payload;
+    }
+
+    adminState.runtimeContentIndexLoadingBySite[siteId] = false;
+
+    if (payload && payload.ok) {
+      mergeRuntimeContentIndex(siteId, payload);
+      rerenderSiteScopedContent();
+    } else if (!opts.silent) {
+      renderPages(scopedPagesList((adminState.manifest || {}).pages || []));
+    }
+
+    return payload;
   }
 
   function cloudflareContentPackageSummary(payload, targetPath, packageType) {
@@ -900,6 +1029,7 @@
 
     if (result.ok) {
       refreshReleaseStatusForActiveSite({ silent: true });
+      refreshRuntimeContentIndexForActiveSite({ silent: true });
     }
 
     return result;
@@ -1012,6 +1142,7 @@
 
     if (result.ok) {
       refreshReleaseStatusForActiveSite({ silent: true });
+      refreshRuntimeContentIndexForActiveSite({ silent: true });
     }
 
     return result;
@@ -1583,6 +1714,8 @@
       renderProductCardFieldInputs(adminState.actionContracts);
       setProductCardOutput(currentProductCardPayload(adminState.actionContracts));
     }
+
+    refreshRuntimeContentIndexForActiveSite({ silent: true });
   }
 
   function isSiteContextControlExempt(control) {
@@ -8876,8 +9009,11 @@
       return;
     }
 
-    const emptyText = activeSiteProfile()
-      ? 'Для выбранного сайта нет страниц в текущем bootstrap. Выберите профиль, совпадающий с content_site, или загрузите структуру этого сайта через Cloudflare runtime.'
+    const profile = activeSiteProfile();
+    const emptyText = profile
+      ? (runtimeContentIndexLoading(profile.site_id)
+          ? 'Загружаю структуру выбранного сайта из Cloudflare runtime...'
+          : 'Для выбранного сайта нет страниц в текущем bootstrap. Выберите профиль, совпадающий с content_site, или загрузите структуру этого сайта через Cloudflare runtime.')
       : 'Сначала выберите домен в блоке "Рабочий сценарий CMS".';
 
     target.innerHTML = Array.isArray(pages) && pages.length > 0
@@ -10049,6 +10185,7 @@
     wireEditorialWidget(adminState.actionContracts, adminState.authContract);
     wireProductCardEditor(adminState.actionContracts, adminState.authContract);
     syncSiteContextGate(activeSiteProfile(), siteProfiles(manifest));
+    refreshRuntimeContentIndexForActiveSite({ silent: true });
     wireSiteChromeEditor();
     if (!isGithubMode()) {
       loadAuditHistory(authContract);
