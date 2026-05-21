@@ -19,7 +19,11 @@
     contentBaselineApprovalsBySite: {},
     directUploadBundlesBySite: {},
     directUploadApprovalsBySite: {},
-    medgenStatusBySite: {}
+    medgenStatusBySite: {},
+    medgenTaskIndexBySite: {},
+    medgenTaskRefreshAtBySite: {},
+    medgenTaskRefreshTimer: null,
+    medgenTaskRefreshInFlight: false
   };
   const siteContextRequiredPanels = ['main-workspace', 'editorial', 'product-cards', 'medgen', 'design', 'technical', 'content', 'workflow', 'modules', 'system'];
   const siteContextControlSelector = 'button, input, select, textarea';
@@ -712,6 +716,10 @@
     });
   }
 
+  async function cloudflareListSiteProfiles() {
+    return cloudflareApiRequest('/api/sites');
+  }
+
   async function cloudflareStoreContentPackage(siteId, payload, packageType) {
     return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/content-packages', {
       method: 'POST',
@@ -742,6 +750,24 @@
 
   async function cloudflareReleaseStatus(siteId) {
     return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/release-status');
+  }
+
+  async function cloudflareMedGenTaskSummary(siteId) {
+    return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/medgen/tasks/summary?refresh=1');
+  }
+
+  async function cloudflareCreateMedGenTask(siteId, payload) {
+    return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/medgen/tasks/create', {
+      method: 'POST',
+      body: JSON.stringify(payload || {})
+    });
+  }
+
+  async function cloudflarePollMedGenTask(siteId, taskId) {
+    return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/medgen/tasks/' + encodeURIComponent(taskId) + '/poll', {
+      method: 'POST',
+      body: JSON.stringify({})
+    });
   }
 
   async function cloudflareCreateReleaseBatch(siteId, payload) {
@@ -1778,6 +1804,7 @@
     }
 
     refreshRuntimeContentIndexForActiveSite({ silent: true });
+    refreshMedGenTaskIndexForActiveSite({ force: true });
   }
 
   function isSiteContextControlExempt(control) {
@@ -1880,6 +1907,95 @@
     return fallback;
   }
 
+  function runtimeSiteProfile(site) {
+    const profile = site && site.profile && typeof site.profile === 'object' ? site.profile : {};
+    const siteId = String(site && site.site_id ? site.site_id : profile.site_id || '').trim();
+    const domain = String(site && site.domain ? site.domain : profile.domain || '').trim();
+    const baseUrl = String(site && site.base_url ? site.base_url : profile.base_url || (domain ? 'https://' + domain : '')).trim();
+
+    return Object.assign({}, profile, {
+      site_id: siteId,
+      display_name: String(profile.display_name || domain || siteId || 'Site'),
+      domain,
+      base_url: baseUrl,
+      root_locale: String(site && site.root_locale ? site.root_locale : profile.root_locale || ''),
+      geo_country: String(site && site.geo_country ? site.geo_country : profile.geo_country || ''),
+      status: String(site && site.status ? site.status : profile.status || 'configured'),
+      deploy_profile: profile.deploy_profile && typeof profile.deploy_profile === 'object' ? profile.deploy_profile : {},
+      medgen_profile: profile.medgen_profile && typeof profile.medgen_profile === 'object' ? profile.medgen_profile : {},
+      seo: profile.seo && typeof profile.seo === 'object' ? profile.seo : {},
+      release: profile.release && typeof profile.release === 'object' ? profile.release : {},
+      runtime_source: 'cloudflare_runtime'
+    });
+  }
+
+  function mergeRuntimeSiteProfiles(sites) {
+    if (!adminState.manifest || !Array.isArray(sites) || sites.length === 0) {
+      return false;
+    }
+
+    const previous = Array.isArray(adminState.manifest.sites) ? adminState.manifest.sites : [];
+    const byId = {};
+
+    previous.forEach((profile) => {
+      const siteId = String(profile && profile.site_id ? profile.site_id : '').trim();
+
+      if (siteId) {
+        byId[siteId] = profile;
+      }
+    });
+
+    sites.map(runtimeSiteProfile).forEach((profile) => {
+      const siteId = String(profile.site_id || '').trim();
+
+      if (!siteId) {
+        return;
+      }
+
+      byId[siteId] = Object.assign({}, byId[siteId] || {}, profile);
+    });
+
+    adminState.manifest.sites = Object.values(byId).sort((a, b) => String(a.site_id || '').localeCompare(String(b.site_id || '')));
+
+    const storedSiteId = readStoredActiveSite();
+    if (!adminState.activeSiteId && storedSiteId && siteProfileById(storedSiteId)) {
+      adminState.activeSiteId = storedSiteId;
+    }
+
+    renderAdminMetrics(adminState.manifest);
+    renderSiteWorkflow(adminState.manifest);
+    renderSiteFleet(adminState.manifest);
+    setSectionCounts(adminState.manifest, adminState.actionContracts || {});
+
+    return true;
+  }
+
+  async function refreshRuntimeSiteProfiles(options) {
+    const opts = options || {};
+
+    if (!isGithubMode() || !githubToken() || !cloudflareRuntimeEnabled()) {
+      return { ok: false, issues: ['cloudflare_runtime_disabled'] };
+    }
+
+    const payload = await cloudflareListSiteProfiles();
+
+    if (payload && payload.ok && Array.isArray(payload.sites)) {
+      mergeRuntimeSiteProfiles(payload.sites);
+      return payload;
+    }
+
+    if (!opts.silent) {
+      const issues = payload && Array.isArray(payload.issues)
+        ? payload.issues
+        : payload && Array.isArray(payload.errors)
+          ? payload.errors
+          : [];
+      setGithubStatus('Cloudflare runtime site list не загружен: ' + (issues.length ? issues.join('; ') : 'API недоступен'));
+    }
+
+    return payload;
+  }
+
   function releaseStatusElements() {
     return {
       panel: document.querySelector('[data-release-status-panel]'),
@@ -1941,10 +2057,13 @@
     }
 
     if (action instanceof HTMLButtonElement) {
+      const widgetKind = widget.getAttribute('data-stage-widget') || kind;
       action.hidden = !actionLabel;
       action.textContent = actionLabel || '';
       action.dataset.stageAction = actionLabel
-        ? (/deploy/i.test(String(actionLabel)) ? 'deploy' : 'refresh')
+        ? (widgetKind === 'medgen'
+            ? (/deploy/i.test(String(actionLabel)) ? 'deploy' : 'medgen')
+            : (/deploy/i.test(String(actionLabel)) ? 'deploy' : 'refresh'))
         : '';
     }
   }
@@ -2038,6 +2157,297 @@
     setStageWidget('site', state.state, state.summary, state.detail, state.action);
   }
 
+  function normalizedDomainKey(value) {
+    return String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/^https?:\/\//, '')
+      .replace(/^www\./, '')
+      .replace(/\/.*$/, '');
+  }
+
+  function medgenTaskPayload(taskRecord) {
+    if (!taskRecord || typeof taskRecord !== 'object') {
+      return {};
+    }
+
+    if (taskRecord.medgen_payload && typeof taskRecord.medgen_payload === 'object') {
+      return taskRecord.medgen_payload;
+    }
+
+    if (taskRecord.payload && typeof taskRecord.payload === 'object') {
+      return taskRecord.payload;
+    }
+
+    return {};
+  }
+
+  function medgenTaskSiteDomain(taskRecord) {
+    const payload = medgenTaskPayload(taskRecord);
+    const site = payload.site && typeof payload.site === 'object' ? payload.site : {};
+
+    return normalizedDomainKey(site.domain || site.base_url || taskRecord.site_domain || '');
+  }
+
+  function medgenTaskMatchesProfile(taskRecord, profile) {
+    if (!profile) {
+      return false;
+    }
+
+    const profileSiteId = String(profile.site_id || '').trim();
+    const taskSiteId = String(taskRecord.site_id || taskRecord.active_site_id || taskRecord.profile_id || '').trim();
+
+    if (profileSiteId && taskSiteId && profileSiteId === taskSiteId) {
+      return true;
+    }
+
+    const profileDomain = normalizedDomainKey(profile.domain || profile.base_url || '');
+    const taskDomain = medgenTaskSiteDomain(taskRecord);
+
+    return Boolean(profileDomain && taskDomain && profileDomain === taskDomain);
+  }
+
+  function medgenTaskStatus(taskRecord) {
+    const task = taskRecord && taskRecord.task && typeof taskRecord.task === 'object' ? taskRecord.task : {};
+
+    return String(task.status || taskRecord.status || taskRecord.medgen_status || '').trim().toLowerCase();
+  }
+
+  function medgenTaskProgress(taskRecord) {
+    const task = taskRecord && taskRecord.task && typeof taskRecord.task === 'object' ? taskRecord.task : {};
+    const progress = Number(task.progress || taskRecord.progress || 0);
+
+    return Number.isFinite(progress) && progress > 0 ? Math.min(100, Math.round(progress)) : 0;
+  }
+
+  function medgenTaskIsReady(taskRecord) {
+    const status = medgenTaskStatus(taskRecord);
+    const task = taskRecord && taskRecord.task && typeof taskRecord.task === 'object' ? taskRecord.task : {};
+
+    return ['succeeded', 'finished', 'complete', 'completed', 'ready'].includes(status)
+      || task.has_result === true
+      || task.has_article === true;
+  }
+
+  function medgenTaskIsFailed(taskRecord) {
+    const status = medgenTaskStatus(taskRecord);
+
+    return ['failed', 'error', 'cancelled', 'canceled', 'timeout'].includes(status);
+  }
+
+  function medgenTaskIsActive(taskRecord) {
+    const status = medgenTaskStatus(taskRecord);
+
+    return ['queued', 'accepted', 'pending', 'running', 'processing', 'in_progress', 'created'].includes(status)
+      || (!medgenTaskIsReady(taskRecord) && !medgenTaskIsFailed(taskRecord));
+  }
+
+  function medgenTaskLabel(taskRecord) {
+    const payload = medgenTaskPayload(taskRecord);
+    const task = taskRecord && taskRecord.task && typeof taskRecord.task === 'object' ? taskRecord.task : {};
+    const id = String(task.task_id || taskRecord.task_id || '').slice(0, 12);
+    const title = String(payload.page_title || payload.page_key || payload.type || 'MedGen task');
+    const status = medgenTaskStatus(taskRecord) || 'unknown';
+    const stage = task.stage ? ' / ' + String(task.stage) : '';
+    const progress = medgenTaskProgress(taskRecord);
+
+    return title + (id ? ' #' + id : '') + ': ' + status + stage + (progress ? ' · ' + progress + '%' : '');
+  }
+
+  function medgenTaskUpdatedAt(taskRecord) {
+    const raw = String(taskRecord && taskRecord.updated_at ? taskRecord.updated_at : '');
+    const time = raw ? Date.parse(raw) : 0;
+
+    return Number.isFinite(time) ? time : 0;
+  }
+
+  function medgenTaskRecordFromRuntime(task) {
+    if (!task || typeof task !== 'object') {
+      return null;
+    }
+
+    return {
+      source: 'cloudflare_runtime',
+      site_id: String(task.site_id || ''),
+      site_domain: String(task.domain || ''),
+      updated_at: String(task.updated_at || ''),
+      medgen_payload: task.payload && typeof task.payload === 'object'
+        ? task.payload
+        : {
+            type: task.type || '',
+            page_key: task.page_key || '',
+            page_title: task.page_title || '',
+            site: {
+              domain: task.domain || ''
+            }
+          },
+      task: {
+        task_id: task.task_id || '',
+        status: task.status || '',
+        stage: task.stage || '',
+        progress: task.progress || 0,
+        result_ready: task.result_ready === true,
+        has_result: task.has_result === true || task.result_ready === true,
+        error: task.error || null
+      }
+    };
+  }
+
+  function medgenTaskIndexFromRuntimeSummary(summaryPayload) {
+    const tasks = [];
+    const seen = {};
+    const addTask = (task) => {
+      const record = medgenTaskRecordFromRuntime(task);
+      const id = record && record.task ? String(record.task.task_id || '') : '';
+
+      if (!record || !id || seen[id]) {
+        return;
+      }
+
+      seen[id] = true;
+      tasks.push(record);
+    };
+
+    addTask(summaryPayload && summaryPayload.latest_task);
+    (Array.isArray(summaryPayload && summaryPayload.active_tasks) ? summaryPayload.active_tasks : []).forEach(addTask);
+
+    return {
+      source: 'cloudflare_runtime',
+      loaded_at: new Date().toISOString(),
+      summary: summaryPayload && summaryPayload.summary && typeof summaryPayload.summary === 'object' ? summaryPayload.summary : {},
+      tasks
+    };
+  }
+
+  function medgenTaskGithubState(runtimeTask, medgenWrapper) {
+    const task = runtimeTask && runtimeTask.task && typeof runtimeTask.task === 'object'
+      ? runtimeTask.task
+      : runtimeTask && typeof runtimeTask === 'object'
+        ? runtimeTask
+        : {};
+    const payload = medgenWrapper && medgenWrapper.payload && typeof medgenWrapper.payload === 'object'
+      ? medgenWrapper.payload
+      : task.payload && typeof task.payload === 'object'
+        ? task.payload
+        : {};
+    const medgenPayload = payload.payload && typeof payload.payload === 'object' ? payload.payload : payload;
+
+    return {
+      task_id: String(task.task_id || ''),
+      payload: medgenPayload,
+      medgen_payload: medgenPayload,
+      task: {
+        task_id: task.task_id || '',
+        status: task.status || '',
+        stage: task.stage || '',
+        progress: task.progress || 0,
+        failed_stage: task.failed_stage || null,
+        error: task.error || null,
+        has_article: task.has_article === true || task.has_result === true || task.result_ready === true,
+        has_result: task.has_result === true || task.result_ready === true
+      },
+      updated_at: new Date().toISOString()
+    };
+  }
+
+  async function githubBackupMedGenTask(siteId, runtimeTask, medgenWrapper) {
+    const taskId = String(runtimeTask && runtimeTask.task_id ? runtimeTask.task_id : runtimeTask && runtimeTask.task ? runtimeTask.task.task_id : '').trim();
+
+    if (!taskId || !githubToken()) {
+      return { ok: false, issues: ['medgen_task_id_or_github_token_missing'] };
+    }
+
+    const path = 'content/medgen/tasks/' + taskId.replace(/[^a-zA-Z0-9._:-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 120) + '.json';
+    const current = await githubReadTextFile(path);
+    const state = medgenTaskGithubState(runtimeTask, medgenWrapper);
+    const result = await githubSaveJsonFile(path, state, 'Sync MedGen task state: ' + siteId, current.ok ? current.sha : '');
+
+    return Object.assign({}, result, { state_path: path });
+  }
+
+  function medgenStageFromTaskIndex(profile) {
+    if (!profile) {
+      return null;
+    }
+
+    const siteId = activeSiteKey();
+    const index = siteId ? adminState.medgenTaskIndexBySite[siteId] : null;
+
+    if (!index) {
+      return null;
+    }
+
+    if (index.loading) {
+      return {
+        state: 'running',
+        summary: 'Проверяю задачи',
+        detail: 'Админка читает runtime-статус MedGen без запуска долгих GitHub Actions.',
+        action: ''
+      };
+    }
+
+    if (index.error) {
+      return {
+        state: 'error',
+        summary: 'Статус не прочитан',
+        detail: index.error,
+        action: 'Открыть MedGen'
+      };
+    }
+
+    const tasks = Array.isArray(index.tasks) ? index.tasks : [];
+
+    if (!tasks.length) {
+      return {
+        state: 'ready',
+        summary: 'Нет активных задач',
+        detail: 'Для выбранного сайта нет сохраненных MedGen task_id. Создайте задачу во втором этапе.',
+        action: 'Открыть MedGen'
+      };
+    }
+
+    const sorted = tasks.slice().sort((a, b) => medgenTaskUpdatedAt(b) - medgenTaskUpdatedAt(a));
+    const active = sorted.filter(medgenTaskIsActive);
+    const ready = sorted.filter(medgenTaskIsReady);
+    const failed = sorted.filter(medgenTaskIsFailed);
+    const latest = sorted[0];
+    const latestLabel = latest ? medgenTaskLabel(latest) : '';
+
+    if (failed.length > 0) {
+      return {
+        state: 'error',
+        summary: 'Есть ошибки: ' + failed.length,
+        detail: medgenTaskLabel(failed[0]) + '. Откройте MedGen и проверьте task_id.',
+        action: 'Открыть MedGen'
+      };
+    }
+
+    if (active.length > 0) {
+      return {
+        state: 'running',
+        summary: 'В работе: ' + active.length,
+        detail: medgenTaskLabel(active[0]) + '. Автообновление читает короткий статус и не тратит Actions минуты на ожидание.',
+        action: 'Открыть MedGen'
+      };
+    }
+
+    if (ready.length > 0) {
+      return {
+        state: 'ready',
+        summary: 'Готово: ' + ready.length,
+        detail: latestLabel + '. Проверьте preview результата и запустите publish/deploy для выбранного сайта.',
+        action: 'Открыть MedGen'
+      };
+    }
+
+    return {
+      state: 'idle',
+      summary: 'Задачи найдены',
+      detail: latestLabel || 'MedGen task JSON найден, но статус не распознан.',
+      action: 'Открыть MedGen'
+    };
+  }
+
   function updateMedGenStageWidget(state) {
     const profile = activeSiteProfile();
     const siteId = activeSiteKey();
@@ -2057,15 +2467,32 @@
       return;
     }
 
-    const current = state || saved;
+    const indexed = medgenStageFromTaskIndex(profile);
 
-    if (current) {
+    if (state) {
       setStageWidget(
         'medgen',
-        current.state || 'idle',
-        current.summary || 'MedGen',
-        current.detail || '',
-        current.action || ''
+        state.state || 'idle',
+        state.summary || 'MedGen',
+        state.detail || '',
+        state.action || ''
+      );
+      return;
+    }
+
+    if (indexed) {
+      setStageWidget('medgen', indexed.state, indexed.summary, indexed.detail, indexed.action || '');
+      scheduleMedGenTaskRefresh();
+      return;
+    }
+
+    if (saved) {
+      setStageWidget(
+        'medgen',
+        saved.state || 'idle',
+        saved.summary || 'MedGen',
+        saved.detail || '',
+        saved.action || ''
       );
       return;
     }
@@ -2079,6 +2506,130 @@
     );
   }
 
+  async function refreshMedGenTaskIndexForActiveSite(options) {
+    const opts = options || {};
+    const profile = activeSiteProfile();
+    const siteId = activeSiteKey();
+
+    if (!profile || !siteId || !isGithubMode() || !githubToken()) {
+      updateMedGenStageWidget();
+      return;
+    }
+
+    const now = Date.now();
+    const lastRefresh = Number(adminState.medgenTaskRefreshAtBySite[siteId] || 0);
+
+    if (!opts.force && lastRefresh && now - lastRefresh < 45000) {
+      updateMedGenStageWidget();
+      return;
+    }
+
+    if (adminState.medgenTaskRefreshInFlight) {
+      return;
+    }
+
+    adminState.medgenTaskRefreshInFlight = true;
+    adminState.medgenTaskRefreshAtBySite[siteId] = now;
+    adminState.medgenTaskIndexBySite[siteId] = {
+      loading: true,
+      tasks: Array.isArray(adminState.medgenTaskIndexBySite[siteId] && adminState.medgenTaskIndexBySite[siteId].tasks)
+        ? adminState.medgenTaskIndexBySite[siteId].tasks
+        : []
+    };
+    updateMedGenStageWidget();
+
+    try {
+      if (cloudflareRuntimeForActiveSite()) {
+        const runtimeSummary = await cloudflareMedGenTaskSummary(siteId);
+
+        if (runtimeSummary && runtimeSummary.ok) {
+          adminState.medgenTaskIndexBySite[siteId] = medgenTaskIndexFromRuntimeSummary(runtimeSummary);
+          updateMedGenStageWidget();
+          return;
+        }
+      }
+
+      const directory = await githubListDirectory('content/medgen/tasks');
+
+      if (!directory.ok) {
+        if (directory.http_status === 404) {
+          adminState.medgenTaskIndexBySite[siteId] = {
+            loaded_at: new Date().toISOString(),
+            tasks: []
+          };
+          updateMedGenStageWidget();
+          return;
+        }
+
+        adminState.medgenTaskIndexBySite[siteId] = {
+          error: Array.isArray(directory.issues) ? directory.issues.join('; ') : 'Не удалось прочитать content/medgen/tasks.',
+          tasks: []
+        };
+        updateMedGenStageWidget();
+        return;
+      }
+
+      const files = directory.entries
+        .filter((entry) => entry && entry.type === 'file' && /\.json$/i.test(String(entry.name || entry.path || '')))
+        .slice(0, 80);
+      const reads = await mapWithConcurrency(files, 4, async (entry) => {
+        const path = String(entry.path || '');
+
+        if (!isSafeRepositoryPath(path, 'content/medgen/tasks/')) {
+          return null;
+        }
+
+        const file = await githubReadTextFile(path);
+
+        if (!file.ok) {
+          return null;
+        }
+
+        try {
+          return JSON.parse(file.content);
+        } catch (error) {
+          return null;
+        }
+      });
+      const tasks = reads.filter((task) => task && medgenTaskMatchesProfile(task, profile));
+
+      adminState.medgenTaskIndexBySite[siteId] = {
+        loaded_at: new Date().toISOString(),
+        tasks
+      };
+      updateMedGenStageWidget();
+    } catch (error) {
+      adminState.medgenTaskIndexBySite[siteId] = {
+        error: 'MedGen task index не загружен: ' + (error && error.message ? error.message : 'network error'),
+        tasks: []
+      };
+      updateMedGenStageWidget();
+    } finally {
+      adminState.medgenTaskRefreshInFlight = false;
+    }
+  }
+
+  function scheduleMedGenTaskRefresh() {
+    if (adminState.medgenTaskRefreshTimer) {
+      clearTimeout(adminState.medgenTaskRefreshTimer);
+      adminState.medgenTaskRefreshTimer = null;
+    }
+
+    const profile = activeSiteProfile();
+    const siteId = activeSiteKey();
+    const index = siteId ? adminState.medgenTaskIndexBySite[siteId] : null;
+    const tasks = index && Array.isArray(index.tasks) ? index.tasks : [];
+    const shouldContinue = Boolean(profile && siteId && isGithubMode() && githubToken() && tasks.some(medgenTaskIsActive));
+
+    if (!shouldContinue) {
+      return;
+    }
+
+    adminState.medgenTaskRefreshTimer = window.setTimeout(() => {
+      refreshMedGenTaskIndexForActiveSite({ force: true });
+    }, 60000);
+  }
+
   function wireStageWidgetActions() {
     document.querySelectorAll('[data-stage-widget-action]').forEach((button) => {
       if (!(button instanceof HTMLButtonElement) || button.dataset.stageWidgetBound === 'true') {
@@ -2087,6 +2638,15 @@
 
       button.dataset.stageWidgetBound = 'true';
       button.addEventListener('click', () => {
+        const widget = button.closest('[data-stage-widget]');
+        const widgetKind = widget ? widget.getAttribute('data-stage-widget') : '';
+
+        if (widgetKind === 'medgen' && button.dataset.stageAction !== 'deploy') {
+          scrollToAdminSection('medgen', 'admin-medgen-task-id');
+          refreshMedGenTaskIndexForActiveSite({ force: true });
+          return;
+        }
+
         if (button.dataset.stageAction === 'deploy') {
           requestCloudflarePagesDeployForActiveSite();
           return;
@@ -3343,16 +3903,76 @@
       return;
     }
 
-    if (!dryRun && !window.confirm(operation === 'archive_site' ? 'Архивировать профиль сайта?' : 'Сохранить профиль сайта через GitHub Actions?')) {
+    const collected = collectSiteFleetPayload(operation);
+    const profile = collected.profile && typeof collected.profile === 'object' ? collected.profile : {};
+    const provider = profile.deploy_profile && profile.deploy_profile.provider === 'static_vps' ? 'static_vps' : 'cloudflare_pages';
+    const siteId = cloudflareSiteIdFromProfile(profile);
+
+    if (!dryRun && !window.confirm(operation === 'archive_site'
+      ? 'Архивировать профиль сайта?'
+      : (provider === 'cloudflare_pages'
+          ? 'Сохранить профиль сайта в Cloudflare runtime и GitHub Contents без запуска Actions?'
+          : 'Сохранить legacy VPS профиль через GitHub Actions?'))) {
       setSiteFleetFormStatus('Операция отменена');
       return;
     }
 
-    setSiteFleetFormStatus(dryRun ? 'Проверяю профиль сайта...' : 'Запускаю сохранение профиля сайта...');
+    setSiteFleetFormStatus(dryRun ? 'Проверяю профиль сайта...' : 'Сохраняю профиль сайта...');
     setStatusBusy('admin-site-fleet-status', true);
 
     try {
-      const result = await githubDispatchCommand('site_fleet', collectSiteFleetPayload(operation), dryRun);
+      if (provider === 'cloudflare_pages') {
+        const issues = [];
+
+        if (!siteId) {
+          issues.push('site_id_required');
+        }
+        if (!profile.domain) {
+          issues.push('domain_required');
+        }
+        if (!profile.base_url) {
+          issues.push('base_url_required');
+        }
+
+        if (operation === 'archive_site') {
+          profile.status = 'archived';
+        }
+
+        if (dryRun || issues.length > 0) {
+          const validation = {
+            ok: issues.length === 0,
+            action: 'site_fleet_low_cost_validate',
+            dry_run: true,
+            site_id: siteId,
+            issues
+          };
+
+          setSiteFleetOutput(validation);
+          setSiteFleetFormStatus(validation.ok ? 'Профиль валиден. Сохранение не запустит Actions.' : 'Профиль требует правки.');
+          return;
+        }
+
+        const runtimeResult = await cloudflareUpsertSiteProfile(Object.assign({}, profile, { site_id: siteId }));
+        const path = 'config/sites/' + siteId + '.json';
+        const current = await githubReadTextFile(path);
+        const githubResult = await githubSaveJsonFile(path, Object.assign({}, profile, { site_id: siteId }), 'Sync site profile: ' + siteId, current.ok ? current.sha : '');
+        const result = {
+          ok: runtimeResult.ok && githubResult.ok,
+          action: 'site_fleet_low_cost_save',
+          site_id: siteId,
+          runtime: runtimeResult,
+          github: githubResult,
+          written_paths: githubResult.written_paths || [],
+          warnings: ['Cloudflare Pages профиль сохранен без GitHub Actions; commit содержит [skip ci].']
+        };
+
+        mergeRuntimeSiteProfiles([{ site_id: siteId, profile: Object.assign({}, profile, { site_id: siteId }) }]);
+        setSiteFleetOutput(result);
+        setSiteFleetFormStatus(result.ok ? 'Профиль сохранен в Cloudflare runtime и GitHub. Actions не запускались.' : 'Профиль сохранен не полностью; проверьте JSON ответа.');
+        return;
+      }
+
+      const result = await githubDispatchCommand('site_fleet', collected, dryRun);
 
       setSiteFleetOutput(result);
       setSiteFleetFormStatus(result.ok ? 'Команда site_fleet отправлена. После завершения Actions обновите админку.' : 'Команда site_fleet не отправлена.');
@@ -4810,12 +5430,12 @@
       return;
     }
 
-    if (!dryRun && !isPoll && !window.confirm('Создать MedGen task_id? Workflow завершится сразу после создания задачи, без ожидания генерации.')) {
+    if (!dryRun && !isPoll && !window.confirm('Создать MedGen task_id? Для Cloudflare-сайта это пройдет через Worker без GitHub Actions.')) {
       setMedGenStatus('MedGen запуск отменен');
       return;
     }
 
-    if (!dryRun && isPoll && !window.confirm('Проверить MedGen task_id коротким workflow? Если задача готова, CMS применит результат.')) {
+    if (!dryRun && isPoll && !window.confirm('Проверить MedGen task_id? Для Cloudflare-сайта это пройдет через Worker без GitHub Actions.')) {
       setMedGenStatus('Проверка MedGen отменена');
       return;
     }
@@ -4826,6 +5446,105 @@
     const deployField = byId('admin-medgen-deploy');
     const workflow = config.medgen_workflow_id || 'medgen-content.yml';
     const payload = collectMedGenPayload();
+    const siteId = activeSiteKey();
+
+    if (cloudflareRuntimeForActiveSite()) {
+      setMedGenStatus(dryRun ? 'Проверяю MedGen payload...' : (isPoll ? 'Проверяю MedGen task_id через Worker...' : 'Создаю MedGen task_id через Worker...'));
+      updateMedGenStageWidget({
+        state: dryRun ? 'idle' : 'running',
+        summary: dryRun ? 'Проверка payload' : (isPoll ? 'Runtime poll' : 'Runtime create'),
+        detail: dryRun
+          ? 'Проверяется структура запроса без публикации.'
+          : 'Статус пишется в Cloudflare runtime и GitHub Contents с [skip ci], GitHub Actions не запускаются.'
+      });
+      setStatusBusy('admin-medgen-status', true);
+
+      try {
+        if (dryRun) {
+          const validation = {
+            ok: Boolean(payload && payload.payload && payload.payload.type && payload.payload.page_title && siteId),
+            action: 'medgen_runtime_validate',
+            dry_run: true,
+            site_id: siteId,
+            payload,
+            issues: []
+          };
+
+          if (!siteId) {
+            validation.issues.push('active_site_required');
+          }
+          if (!payload.payload || !payload.payload.type) {
+            validation.issues.push('medgen_type_required');
+          }
+          if (!payload.payload || !payload.payload.page_title) {
+            validation.issues.push('page_title_required');
+          }
+
+          validation.ok = validation.issues.length === 0;
+          setMedGenOutput(validation);
+          setMedGenStatus(validation.ok ? 'Payload валиден. Runtime create не потратит Actions.' : 'Payload требует правки.');
+          updateMedGenStageWidget({
+            state: validation.ok ? 'ready' : 'error',
+            summary: validation.ok ? 'Payload готов' : 'Payload ошибка',
+            detail: validation.ok ? 'Можно создать task_id через Worker.' : validation.issues.join('; ')
+          });
+          return;
+        }
+
+        const runtimeResult = isPoll
+          ? await cloudflarePollMedGenTask(siteId, taskId)
+          : await cloudflareCreateMedGenTask(siteId, payload);
+        let githubResult = null;
+
+        if (runtimeResult && runtimeResult.ok && runtimeResult.task) {
+          githubResult = await githubBackupMedGenTask(siteId, runtimeResult.task, payload);
+
+          if (!isPoll && taskIdField instanceof HTMLInputElement && runtimeResult.task.task_id) {
+            taskIdField.value = runtimeResult.task.task_id;
+          }
+
+          adminState.medgenTaskIndexBySite[siteId] = {
+            loaded_at: new Date().toISOString(),
+            tasks: [medgenTaskRecordFromRuntime(runtimeResult.task)].filter(Boolean)
+          };
+          updateMedGenStageWidget();
+        }
+
+        const combined = {
+          ok: Boolean(runtimeResult && runtimeResult.ok),
+          action: isPoll ? 'medgen_runtime_poll' : 'medgen_runtime_create',
+          site_id: siteId,
+          runtime: runtimeResult,
+          github: githubResult,
+          warnings: ['GitHub Actions не запускались. Task state сохранен в runtime и продублирован в GitHub Contents с [skip ci].']
+        };
+        const status = runtimeResult && runtimeResult.task ? runtimeResult.task.status : '';
+
+        setMedGenOutput(combined);
+        setMedGenStatus(combined.ok
+          ? (isPoll ? 'MedGen task_id проверен через Worker.' : 'MedGen task_id создан через Worker и сохранен в статусах.')
+          : 'MedGen runtime операция не выполнена.');
+        updateMedGenStageWidget(combined.ok
+          ? {
+            state: status === 'succeeded' ? 'ready' : (status === 'failed' ? 'error' : 'running'),
+            summary: status === 'succeeded' ? 'Контент готов' : (status === 'failed' ? 'MedGen ошибка' : 'MedGen в работе'),
+            detail: runtimeResult && runtimeResult.task
+              ? medgenTaskLabel(medgenTaskRecordFromRuntime(runtimeResult.task))
+              : 'Runtime ответ не содержит task.',
+            action: status === 'succeeded' ? 'Deploy' : 'Открыть MedGen'
+          }
+          : {
+            state: 'error',
+            summary: 'MedGen runtime ошибка',
+            detail: runtimeResult && Array.isArray(runtimeResult.issues) ? runtimeResult.issues.join('; ') : 'Worker не создал/не проверил задачу.'
+          });
+        window.setTimeout(() => refreshMedGenTaskIndexForActiveSite({ force: true }), 8000);
+      } finally {
+        setStatusBusy('admin-medgen-status', false);
+      }
+
+      return;
+    }
 
     setMedGenStatus(dryRun ? 'Проверяю MedGen payload...' : (isPoll ? 'Проверяю MedGen task_id...' : 'Создаю MedGen task_id...'));
     updateMedGenStageWidget({
@@ -4874,6 +5593,9 @@
           summary: 'MedGen не запущен',
           detail: Array.isArray(result.issues) ? result.issues.join('; ') : 'Workflow вернул ошибку.'
         });
+      if (result.ok && !dryRun) {
+        window.setTimeout(() => refreshMedGenTaskIndexForActiveSite({ force: true }), 12000);
+      }
     } finally {
       setStatusBusy('admin-medgen-status', false);
     }
@@ -5975,8 +6697,8 @@
       'data-site-fleet-archive': 'Архивирует профиль сайта. Публичные файлы не удаляются без отдельного workflow.',
       'data-domain-hosting-provider-select': 'Выбирает основную среду нового сайта. По умолчанию это Pages-хостинг; VPS используется только как optional static mirror после отдельного подтверждения.',
       'data-medgen-dry-run': 'Проверяет задачу MedGen без публикации и deploy.',
-      'data-medgen-run': 'Быстро создает MedGen task_id и завершает workflow без ожидания генерации.',
-      'data-medgen-poll': 'Коротко проверяет ранее созданный task_id. Если задача готова, применяет результат в CMS.',
+      'data-medgen-run': 'Для Cloudflare-сайта создает MedGen task_id через Worker без GitHub Actions и сразу сохраняет статус в админке.',
+      'data-medgen-poll': 'Проверяет ранее созданный task_id через Worker без GitHub Actions. Если задача готова, статус обновится в виджете.',
       'data-agent-key-generate': 'Создает новый API-ключ для ИИ-агента. Raw key показывается только один раз.',
       'data-agent-key-save': 'Сохраняет hash/fingerprint и права agent key, не сохраняя raw key.',
       'data-admin-user-save': 'Сохраняет GitHub-пользователя, роль и права редактора.',
@@ -6771,6 +7493,36 @@
       ok: true,
       sha: payload.sha || '',
       content: base64ToUtf8(payload.content || ''),
+      data: payload
+    };
+  }
+
+  async function githubListDirectory(relativePath) {
+    const repository = githubRepository();
+    const ref = githubBranch();
+
+    if (!repository) {
+      return { ok: false, issues: ['GitHub repository config is missing.'] };
+    }
+
+    const response = await fetch(githubApiUrl('/repos/' + repository + '/contents/' + githubContentsPath(relativePath) + '?ref=' + encodeURIComponent(ref)), {
+      method: 'GET',
+      headers: githubHeaders()
+    });
+    const payload = await readResponseJson(response);
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        http_status: response.status,
+        issues: [payload.message || 'GitHub Contents directory read failed.'],
+        data: payload
+      };
+    }
+
+    return {
+      ok: true,
+      entries: Array.isArray(payload) ? payload : [],
       data: payload
     };
   }
@@ -10677,6 +11429,7 @@
     wireProductCardEditor(adminState.actionContracts, adminState.authContract);
     syncSiteContextGate(activeSiteProfile(), siteProfiles(manifest));
     refreshRuntimeContentIndexForActiveSite({ silent: true });
+    refreshMedGenTaskIndexForActiveSite({ force: true });
     wireSiteChromeEditor();
     if (!isGithubMode()) {
       loadAuditHistory(authContract);
@@ -10757,6 +11510,7 @@
 
       applyGithubActor(githubState.actorLogin || 'unknown-github-user');
       renderAdminBootstrap(payload);
+      refreshRuntimeSiteProfiles({ silent: true });
       setGithubStatus('GitHub подключен: ' + (authState.actor ? authState.actor.username + ' / ' + authState.actor.role : 'unknown') + '. Редакторские сохранения пишутся через Contents API; Actions запускаются только для build/deploy.');
     } catch (error) {
       clearAdminBootstrap('GitHub bootstrap unavailable');

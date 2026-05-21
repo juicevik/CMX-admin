@@ -2833,6 +2833,10 @@ body[data-site-context="missing"] .site-workflow__active select {
   gap: var(--admin-space-3);
 }
 
+.site-workflow__stage-widgets--dashboard {
+  margin-block: var(--admin-space-3) var(--admin-space-4);
+}
+
 .stage-widget {
   position: relative;
   display: grid;
