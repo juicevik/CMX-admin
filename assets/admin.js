@@ -15,6 +15,8 @@
     runtimeContentIndexRequestSeq: 0,
     runtimeContentIndexesBySite: {},
     runtimeContentIndexLoadingBySite: {},
+    contentBaselinePayloadsBySite: {},
+    contentBaselineApprovalsBySite: {},
     directUploadBundlesBySite: {},
     directUploadApprovalsBySite: {},
     medgenStatusBySite: {}
@@ -769,6 +771,13 @@
 
   async function cloudflareRuntimeContentIndex(siteId) {
     return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/content-index');
+  }
+
+  async function cloudflareSeedContentBaseline(siteId, payload) {
+    return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/content-baseline', {
+      method: 'POST',
+      body: JSON.stringify(Object.assign({}, payload || {}, { site_id: siteId }))
+    });
   }
 
   function cloudflareRuntimeForActiveSite() {
@@ -1833,7 +1842,13 @@
       directUploadJson: document.querySelector('[data-direct-upload-json]'),
       directUploadPreview: document.querySelector('[data-direct-upload-preview]'),
       directUploadDeploy: document.querySelector('[data-direct-upload-deploy]'),
-      directUploadStatus: document.querySelector('[data-direct-upload-status]')
+      directUploadStatus: document.querySelector('[data-direct-upload-status]'),
+      baselineGenerate: document.querySelector('[data-content-baseline-generate]'),
+      baselineFile: document.querySelector('[data-content-baseline-file]'),
+      baselineJson: document.querySelector('[data-content-baseline-json]'),
+      baselinePreview: document.querySelector('[data-content-baseline-preview]'),
+      baselineSeed: document.querySelector('[data-content-baseline-seed]'),
+      baselineStatus: document.querySelector('[data-content-baseline-status]')
     };
   }
 
@@ -2326,6 +2341,290 @@
     return result;
   }
 
+  function setBaselineStatus(message, state, seedEnabled) {
+    const elements = releaseStatusElements();
+
+    if (elements.baselineStatus) {
+      elements.baselineStatus.value = message;
+      elements.baselineStatus.textContent = message;
+      elements.baselineStatus.dataset.contentBaselineState = state || 'idle';
+    }
+
+    if (elements.baselineSeed instanceof HTMLButtonElement) {
+      elements.baselineSeed.disabled = seedEnabled !== true;
+    }
+  }
+
+  function activeSiteBaselineKey() {
+    return activeSiteKey() || cloudflareSiteIdFromProfile(activeSiteProfile()) || '';
+  }
+
+  function pageContractBaselineSource(page, siteId) {
+    const source = clone(page || {});
+    const payloadTemplates = source.payload_templates && typeof source.payload_templates === 'object'
+      ? source.payload_templates
+      : {};
+    const draftSave = payloadTemplates.draft_save && typeof payloadTemplates.draft_save === 'object'
+      ? payloadTemplates.draft_save
+      : {};
+    const resource = String(source.resource || source.path || source.target_path || draftSave.resource || draftSave.target_path || '').trim();
+    const pageData = draftSave.page && typeof draftSave.page === 'object'
+      ? draftSave.page
+      : source.page && typeof source.page === 'object'
+        ? source.page
+        : null;
+
+    if (!resource || !pageData) {
+      return null;
+    }
+
+    const nextDraftSave = Object.assign({}, draftSave, {
+      resource,
+      target_path: resource,
+      site_id: siteId,
+      page: Object.assign({}, pageData, {
+        site_id: siteId,
+        status: pageData.status || 'published'
+      })
+    });
+
+    return Object.assign({}, source, {
+      resource,
+      site_id: siteId,
+      payload_templates: Object.assign({}, payloadTemplates, {
+        draft_save: nextDraftSave
+      })
+    });
+  }
+
+  function baselineContractsForActiveSite() {
+    const contracts = adminState.actionContracts || {};
+    const siteId = activeSiteBaselineKey();
+    const allPages = Array.isArray(contracts.pages) ? contracts.pages : [];
+    const selectedPages = scopedPagesList(allPages);
+    const fallbackPages = allPages.filter((page) => !itemSiteId(page));
+    const sourcePages = selectedPages.length > 0 ? selectedPages : fallbackPages;
+    const seen = new Set();
+
+    return sourcePages
+      .map((page) => pageContractBaselineSource(page, siteId))
+      .filter((page) => {
+        if (!page || seen.has(page.resource)) {
+          return false;
+        }
+
+        seen.add(page.resource);
+        return true;
+      });
+  }
+
+  function buildRuntimeBaselinePayloadForActiveSite() {
+    const profile = activeSiteProfile();
+    const siteId = activeSiteBaselineKey();
+
+    if (!profile || hostingProvider(profile) !== 'cloudflare_pages') {
+      throw new Error('Baseline доступен только для выбранного Cloudflare Pages сайта.');
+    }
+
+    if (!siteId) {
+      throw new Error('Сначала выберите активный сайт.');
+    }
+
+    const actionContractPages = baselineContractsForActiveSite();
+
+    if (actionContractPages.length === 0) {
+      throw new Error('В bootstrap нет страниц для baseline выбранного сайта. Вставьте готовый runtime-index JSON от агента.');
+    }
+
+    return {
+      request_id: 'baseline-' + Date.now(),
+      site_id: siteId,
+      content_index: {
+        version: 'cmx-site-content-index-v1',
+        mode: 'cloudflare_runtime_content',
+        site_id: siteId
+      },
+      action_contract_pages: actionContractPages
+    };
+  }
+
+  function parseBaselinePayload(raw) {
+    let payload;
+
+    try {
+      payload = JSON.parse(raw);
+    } catch (error) {
+      throw new Error('Baseline JSON не читается: ' + (error && error.message ? error.message : String(error)));
+    }
+
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw new Error('Baseline должен быть JSON-объектом.');
+    }
+
+    const siteId = activeSiteBaselineKey();
+    const payloadSiteId = String(payload.site_id || payload.content_index && payload.content_index.site_id || '').trim();
+
+    if (payloadSiteId && siteId && payloadSiteId !== siteId) {
+      throw new Error('Baseline относится к другому site_id: ' + payloadSiteId + '. Выбран сайт ' + siteId + '.');
+    }
+
+    const records = Array.isArray(payload.action_contract_pages)
+      ? payload.action_contract_pages
+      : Array.isArray(payload.pages)
+        ? payload.pages
+        : Array.isArray(payload.records)
+          ? payload.records
+          : [];
+
+    if (records.length === 0) {
+      throw new Error('В baseline нет action_contract_pages[], pages[] или records[].');
+    }
+
+    const valid = records.filter((record) => {
+      const draftSave = record
+        && record.payload_templates
+        && record.payload_templates.draft_save
+        && typeof record.payload_templates.draft_save === 'object'
+          ? record.payload_templates.draft_save
+          : {};
+      const page = record && record.page && typeof record.page === 'object'
+        ? record.page
+        : draftSave.page && typeof draftSave.page === 'object'
+          ? draftSave.page
+          : null;
+      const resource = String(record && (record.resource || record.path || record.target_path) || draftSave.resource || draftSave.target_path || '').trim();
+
+      return Boolean(page && resource);
+    });
+
+    if (valid.length === 0) {
+      throw new Error('Baseline не содержит страниц с page и resource/target_path.');
+    }
+
+    return Object.assign({}, payload, {
+      site_id: siteId || payloadSiteId,
+      request_id: payload.request_id || 'baseline-' + Date.now()
+    });
+  }
+
+  function summarizeBaselinePayload(payload) {
+    const records = Array.isArray(payload.action_contract_pages)
+      ? payload.action_contract_pages
+      : Array.isArray(payload.pages)
+        ? payload.pages
+        : Array.isArray(payload.records)
+          ? payload.records
+          : [];
+    const routes = records
+      .map((record) => {
+        const draftSave = record
+          && record.payload_templates
+          && record.payload_templates.draft_save
+          && typeof record.payload_templates.draft_save === 'object'
+            ? record.payload_templates.draft_save
+            : {};
+        const page = record && record.page && typeof record.page === 'object'
+          ? record.page
+          : draftSave.page && typeof draftSave.page === 'object'
+            ? draftSave.page
+            : {};
+
+        return String(page.route || record && (record.route || record.resource || record.path) || '').trim();
+      })
+      .filter(Boolean)
+      .slice(0, 4);
+
+    return {
+      pages: records.length,
+      sample: routes,
+      text: 'Baseline готов: ' + records.length + ' страниц' + (routes.length ? ', примеры: ' + routes.join(', ') : '') + '.'
+    };
+  }
+
+  async function previewBaselinePayload() {
+    const elements = releaseStatusElements();
+    const siteKey = activeSiteBaselineKey();
+
+    if (!siteKey) {
+      setBaselineStatus('Сначала выберите активный Cloudflare Pages сайт.', 'error', false);
+      return null;
+    }
+
+    if (!elements.baselineJson || !String(elements.baselineJson.value || '').trim()) {
+      setBaselineStatus('Соберите baseline из bootstrap или вставьте готовый runtime-index JSON.', 'error', false);
+      return null;
+    }
+
+    try {
+      const raw = String(elements.baselineJson.value || '');
+      const payload = parseBaselinePayload(raw);
+      const normalizedRaw = JSON.stringify(payload);
+      const summary = summarizeBaselinePayload(payload);
+      const payloadHash = await sha256Hex(normalizedRaw);
+
+      adminState.contentBaselinePayloadsBySite[siteKey] = payload;
+      adminState.contentBaselineApprovalsBySite[siteKey] = {
+        payload_hash: payloadHash,
+        previewed_at: new Date().toISOString(),
+        summary
+      };
+      setBaselineStatus(summary.text + ' payload sha256 ' + payloadHash.slice(0, 16) + '.', 'ready', true);
+      return payload;
+    } catch (error) {
+      setBaselineStatus(error && error.message ? error.message : String(error), 'error', false);
+      return null;
+    }
+  }
+
+  async function seedBaselineForActiveSite() {
+    const profile = activeSiteProfile();
+    const siteKey = activeSiteBaselineKey();
+    const payload = adminState.contentBaselinePayloadsBySite[siteKey] || await previewBaselinePayload();
+
+    if (!payload || !profile || hostingProvider(profile) !== 'cloudflare_pages') {
+      setBaselineStatus('Baseline доступен только для выбранного Cloudflare Pages сайта.', 'error', false);
+      return { ok: false, issues: ['cloudflare_pages_site_required'] };
+    }
+
+    const approval = adminState.contentBaselineApprovalsBySite[siteKey] || null;
+
+    if (!approval || !approval.payload_hash) {
+      setBaselineStatus('Сначала выполните preview baseline и согласуйте payload sha256.', 'error', false);
+      return { ok: false, issues: ['content_baseline_preview_required'] };
+    }
+
+    setBaselineStatus('Загружаю baseline в Cloudflare runtime без GitHub Actions...', 'loading', false);
+
+    const result = await cloudflareSeedContentBaseline(siteKey, Object.assign({}, payload, {
+      request_id: payload.request_id || 'baseline-' + Date.now(),
+      approval: {
+        accepted: true,
+        payload_hash: approval.payload_hash,
+        preview_source: 'admin_content_baseline',
+        previewed_at: approval.previewed_at || ''
+      }
+    }));
+
+    if (result && result.ok) {
+      setBaselineStatus('Baseline загружен: ' + Number(result.page_count || 0) + ' страниц. GitHub Actions не запускались.', 'done', true);
+      const index = await cloudflareRuntimeContentIndex(siteKey);
+      if (index && index.ok) {
+        mergeRuntimeContentIndex(siteKey, index);
+        rerenderSiteScopedContent();
+      }
+    } else {
+      const issues = result && Array.isArray(result.issues)
+        ? result.issues.join('; ')
+        : result && Array.isArray(result.errors)
+          ? result.errors.join('; ')
+          : 'content-baseline endpoint недоступен';
+      setBaselineStatus('Baseline не загружен: ' + issues, 'error', true);
+    }
+
+    await refreshReleaseStatusForActiveSite({ silent: true });
+    return result;
+  }
+
   function setDirectUploadStatus(message, state, deployEnabled) {
     const elements = releaseStatusElements();
 
@@ -2510,7 +2809,14 @@
   function wireReleaseStatusPanel() {
     const elements = releaseStatusElements();
 
-    if (!elements.refresh && !elements.prepare && !elements.deploy && !elements.directUploadPreview && !elements.directUploadDeploy) {
+    if (!elements.refresh
+      && !elements.prepare
+      && !elements.deploy
+      && !elements.directUploadPreview
+      && !elements.directUploadDeploy
+      && !elements.baselineGenerate
+      && !elements.baselinePreview
+      && !elements.baselineSeed) {
       return;
     }
 
@@ -2532,6 +2838,58 @@
       elements.deploy.dataset.cloudflarePagesDeployBound = 'true';
       elements.deploy.addEventListener('click', () => {
         requestCloudflarePagesDeployForActiveSite();
+      });
+    }
+
+    if (elements.baselineGenerate && elements.baselineGenerate.dataset.contentBaselineGenerateBound !== 'true') {
+      elements.baselineGenerate.dataset.contentBaselineGenerateBound = 'true';
+      elements.baselineGenerate.addEventListener('click', async () => {
+        try {
+          const payload = buildRuntimeBaselinePayloadForActiveSite();
+          if (elements.baselineJson) {
+            elements.baselineJson.value = JSON.stringify(payload, null, 2);
+          }
+          await previewBaselinePayload();
+        } catch (error) {
+          setBaselineStatus(error && error.message ? error.message : String(error), 'error', false);
+        }
+      });
+    }
+
+    if (elements.baselineFile && elements.baselineFile.dataset.contentBaselineFileBound !== 'true') {
+      elements.baselineFile.dataset.contentBaselineFileBound = 'true';
+      elements.baselineFile.addEventListener('change', async () => {
+        const file = elements.baselineFile.files && elements.baselineFile.files[0]
+          ? elements.baselineFile.files[0]
+          : null;
+
+        if (!file) {
+          return;
+        }
+
+        try {
+          const text = await file.text();
+          if (elements.baselineJson) {
+            elements.baselineJson.value = text;
+          }
+          await previewBaselinePayload();
+        } catch (error) {
+          setBaselineStatus('Файл baseline не прочитан: ' + (error && error.message ? error.message : String(error)), 'error', false);
+        }
+      });
+    }
+
+    if (elements.baselinePreview && elements.baselinePreview.dataset.contentBaselinePreviewBound !== 'true') {
+      elements.baselinePreview.dataset.contentBaselinePreviewBound = 'true';
+      elements.baselinePreview.addEventListener('click', async () => {
+        await previewBaselinePayload();
+      });
+    }
+
+    if (elements.baselineSeed && elements.baselineSeed.dataset.contentBaselineSeedBound !== 'true') {
+      elements.baselineSeed.dataset.contentBaselineSeedBound = 'true';
+      elements.baselineSeed.addEventListener('click', () => {
+        seedBaselineForActiveSite();
       });
     }
 
@@ -2619,6 +2977,11 @@
     updateMedGenStageWidget();
     wireStageWidgetActions();
     wireReleaseStatusPanel();
+    if (!profile) {
+      setBaselineStatus('Выберите Cloudflare Pages сайт перед baseline.', 'idle', false);
+    } else if (hostingProvider(profile) !== 'cloudflare_pages') {
+      setBaselineStatus('Baseline нужен только для Cloudflare Pages runtime.', 'idle', false);
+    }
     refreshReleaseStatusForActiveSite({ silent: true });
   }
 
@@ -5426,7 +5789,7 @@
       insertHelpBubble(summary, label, helps[name], 'section');
     });
 
-    document.querySelectorAll('.editorial-panel > summary, .domain-design > summary, .design-favicon-tool > summary, .workflow-page > summary').forEach((summary) => {
+    document.querySelectorAll('.editorial-panel > summary, .domain-design > summary, .design-favicon-tool > summary, .workflow-page > summary, .site-workflow__direct-upload > summary').forEach((summary) => {
       const text = String(summary.textContent || '').trim();
       const lower = text.toLowerCase();
       let help = '';
@@ -5449,6 +5812,8 @@
         help = 'Поля доменного профиля задают новый сайт: домен, GEO, root locale, route prefixes и SEO-основу.';
       } else if (lower.includes('favicon')) {
         help = 'Позволяет заменить favicon выбранного сайта без полной генерации нового дизайна.';
+      } else if (lower.includes('baseline')) {
+        help = 'Первично загружает skeleton-страницы выбранного Cloudflare Pages сайта в runtime, чтобы редактор увидел страницы без запуска GitHub Actions.';
       } else {
         help = 'Этот спойлер разворачивает связанный рабочий блок. Наведи курсор на поля внутри, чтобы увидеть точные подсказки.';
       }
@@ -5462,6 +5827,9 @@
       'data-site-navigation-validate': 'Проверяет формат меню шапки и подвала без сохранения.',
       'data-site-navigation-apply': 'Сохраняет меню выбранного сайта через GitHub Contents API.',
       'data-release-status-refresh': 'Показывает, какие правки уже приняты Cloudflare runtime и сколько пакетов уйдет в следующий batch deploy.',
+      'data-content-baseline-generate': 'Собирает первичный runtime content-index из текущего bootstrap выбранного сайта. Это нужно один раз для нового Cloudflare Pages сайта, чтобы страницы стали редактируемыми без GitHub Actions.',
+      'data-content-baseline-preview': 'Проверяет baseline JSON, считает страницы и показывает sha256 payload для согласования перед загрузкой в Worker.',
+      'data-content-baseline-seed': 'Загружает baseline страницы выбранного сайта в Cloudflare Worker/R2/D1 без запуска GitHub Actions.',
       'data-editorial-media-save': 'Сохраняет изображение страницы или карточки в безопасный media path.',
       'data-editorial-queue-validate': 'Проверяет payload страницы: обязательные поля, route, SEO и безопасный target_path.',
       'data-editorial-publish': 'Сохраняет страницу в GitHub без автоматического запуска Actions.',
