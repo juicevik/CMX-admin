@@ -3437,6 +3437,19 @@ body[data-site-context="missing"] .site-workflow__active select {
   background: var(--admin-surface);
 }
 
+.medgen-task-monitor__summary button {
+  min-height: 1.75rem;
+  padding: 0 0.68rem;
+  border: 1px solid color-mix(in srgb, var(--admin-accent) 44%, var(--admin-border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--admin-accent) 12%, var(--admin-surface));
+  color: var(--admin-accent-strong);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
 .medgen-task-monitor__list {
   display: grid;
   gap: var(--admin-space-2);

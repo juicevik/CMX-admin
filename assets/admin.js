@@ -770,6 +770,13 @@
     });
   }
 
+  async function cloudflareCreateMedGenPreview(siteId, taskId) {
+    return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/medgen/tasks/' + encodeURIComponent(taskId) + '/preview', {
+      method: 'POST',
+      body: JSON.stringify({})
+    });
+  }
+
   async function cloudflareUpsertMedGenTask(siteId, payload) {
     return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/medgen/tasks', {
       method: 'POST',
@@ -2345,6 +2352,7 @@
       + '<span>готово к preview: ' + escapeHtml(String(counts.ready)) + '</span>'
       + '<span>в работе: ' + escapeHtml(String(counts.active)) + '</span>'
       + '<span>ошибки: ' + escapeHtml(String(counts.failed)) + '</span>'
+      + (counts.ready > 0 ? '<button type="button" data-medgen-preview-ready-all>Собрать ready preview</button>' : '')
       + '</div>';
 
     const rows = list.slice(0, 24).map((taskRecord) => {
@@ -2357,12 +2365,16 @@
       const pageKey = medgenTaskPageKey(taskRecord);
       const meta = [medgenTaskType(taskRecord), pageKey, id ? '#' + id.slice(0, 10) : ''].filter(Boolean).join(' · ');
 
+      const action = id && state === 'ready'
+        ? '<button type="button" data-medgen-task-preview="' + escapeHtml(id) + '">Preview</button>'
+        : (id ? '<button type="button" data-medgen-task-pick="' + escapeHtml(id) + '">Проверить</button>' : '');
+
       return '<article class="medgen-task-row" data-medgen-task-state="' + escapeHtml(state) + '">'
         + '<span class="medgen-task-row__lamp" aria-hidden="true"></span>'
         + '<div><h4>' + escapeHtml(title) + '</h4><p>' + escapeHtml(meta) + '</p></div>'
         + '<strong>' + escapeHtml(status) + (stage ? ' / ' + escapeHtml(stage) : '') + '</strong>'
         + '<small>' + escapeHtml(String(progress)) + '%</small>'
-        + (id ? '<button type="button" data-medgen-task-pick="' + escapeHtml(id) + '">Проверить</button>' : '')
+        + action
         + '</article>';
     }).join('');
 
@@ -2399,6 +2411,93 @@
   }
 
   function wireMedGenTaskMonitor() {
+    document.querySelectorAll('[data-medgen-preview-ready-all]').forEach((button) => {
+      if (!(button instanceof HTMLButtonElement) || button.dataset.medgenPreviewReadyAllBound === 'true') {
+        return;
+      }
+
+      button.dataset.medgenPreviewReadyAllBound = 'true';
+      button.addEventListener('click', async () => {
+        const siteId = activeSiteKey();
+        const index = siteId ? adminState.medgenTaskIndexBySite[siteId] : null;
+        const tasks = index && Array.isArray(index.tasks) ? index.tasks : [];
+        const ready = tasks.filter(medgenTaskIsReady).map(medgenTaskId).filter(Boolean).slice(0, 25);
+
+        if (!siteId || ready.length === 0) {
+          setMedGenOutput({ ok: false, issues: ['ready_medgen_tasks_not_found'] });
+          return;
+        }
+
+        button.disabled = true;
+        button.textContent = 'Собираю preview...';
+
+        try {
+          const results = [];
+
+          for (const taskId of ready) {
+            results.push(await cloudflareCreateMedGenPreview(siteId, taskId));
+          }
+
+          const ok = results.every((result) => result && result.ok);
+          setMedGenOutput({
+            ok,
+            action: 'medgen_preview_ready_all',
+            site_id: siteId,
+            total: results.length,
+            created: results.filter((result) => result && result.ok).length,
+            results
+          });
+          setMedGenStatus(ok
+            ? 'Ready MedGen-страницы собраны в runtime preview. Проверьте список страниц выбранного сайта.'
+            : 'Часть MedGen preview не собрана. Проверьте JSON ответа.');
+          await refreshRuntimeContentIndexForActiveSite({ silent: true, force: true });
+          await refreshReleaseStatusForActiveSite({ silent: true });
+          await refreshMedGenTaskIndexForActiveSite({ force: true });
+        } finally {
+          button.disabled = false;
+          button.textContent = 'Собрать ready preview';
+        }
+      });
+    });
+
+    document.querySelectorAll('[data-medgen-task-preview]').forEach((button) => {
+      if (!(button instanceof HTMLButtonElement) || button.dataset.medgenTaskPreviewBound === 'true') {
+        return;
+      }
+
+      button.dataset.medgenTaskPreviewBound = 'true';
+      button.addEventListener('click', async () => {
+        const siteId = activeSiteKey();
+        const taskId = String(button.getAttribute('data-medgen-task-preview') || '').trim();
+
+        if (!siteId || !taskId) {
+          setMedGenOutput({ ok: false, issues: ['site_id_or_task_id_missing'] });
+          return;
+        }
+
+        button.disabled = true;
+        button.textContent = 'Preview...';
+
+        try {
+          const result = await cloudflareCreateMedGenPreview(siteId, taskId);
+
+          setMedGenOutput(result);
+          setMedGenStatus(result && result.ok
+            ? 'MedGen result собран в preview-пакет выбранного сайта.'
+            : 'MedGen preview не создан. Проверьте JSON ответа.');
+
+          if (result && result.ok) {
+            await refreshRuntimeContentIndexForActiveSite({ silent: true, force: true });
+            await refreshReleaseStatusForActiveSite({ silent: true });
+            await refreshMedGenTaskIndexForActiveSite({ force: true });
+          }
+        } finally {
+          button.disabled = false;
+          button.textContent = 'Preview';
+        }
+      });
+    });
+
     document.querySelectorAll('[data-medgen-task-pick]').forEach((button) => {
       if (!(button instanceof HTMLButtonElement) || button.dataset.medgenTaskPickBound === 'true') {
         return;
@@ -2467,6 +2566,7 @@
     };
 
     addTask(summaryPayload && summaryPayload.latest_task);
+    (Array.isArray(summaryPayload && summaryPayload.tasks) ? summaryPayload.tasks : []).forEach(addTask);
     (Array.isArray(summaryPayload && summaryPayload.active_tasks) ? summaryPayload.active_tasks : []).forEach(addTask);
 
     return {
