@@ -2539,19 +2539,26 @@
     updateMedGenStageWidget();
 
     try {
+      let runtimeIndex = null;
       if (cloudflareRuntimeForActiveSite()) {
         const runtimeSummary = await cloudflareMedGenTaskSummary(siteId);
 
         if (runtimeSummary && runtimeSummary.ok) {
-          adminState.medgenTaskIndexBySite[siteId] = medgenTaskIndexFromRuntimeSummary(runtimeSummary);
+          runtimeIndex = medgenTaskIndexFromRuntimeSummary(runtimeSummary);
+          adminState.medgenTaskIndexBySite[siteId] = runtimeIndex;
           updateMedGenStageWidget();
-          return;
         }
       }
 
       const directory = await githubListDirectory('content/medgen/tasks');
 
       if (!directory.ok) {
+        if (runtimeIndex) {
+          adminState.medgenTaskIndexBySite[siteId] = runtimeIndex;
+          updateMedGenStageWidget();
+          return;
+        }
+
         if (directory.http_status === 404) {
           adminState.medgenTaskIndexBySite[siteId] = {
             loaded_at: new Date().toISOString(),
@@ -2592,10 +2599,27 @@
         }
       });
       const tasks = reads.filter((task) => task && medgenTaskMatchesProfile(task, profile));
+      const mergedTasks = [];
+      const seen = {};
+      const addTask = (task) => {
+        const id = String(task && task.task && task.task.task_id ? task.task.task_id : task && task.task_id ? task.task_id : '').trim();
+
+        if (!id || seen[id]) {
+          return;
+        }
+
+        seen[id] = true;
+        mergedTasks.push(task);
+      };
+
+      (runtimeIndex && Array.isArray(runtimeIndex.tasks) ? runtimeIndex.tasks : []).forEach(addTask);
+      tasks.forEach(addTask);
 
       adminState.medgenTaskIndexBySite[siteId] = {
+        source: runtimeIndex ? 'cloudflare_runtime+github_contents' : 'github_contents',
         loaded_at: new Date().toISOString(),
-        tasks
+        summary: runtimeIndex && runtimeIndex.summary ? runtimeIndex.summary : {},
+        tasks: mergedTasks
       };
       updateMedGenStageWidget();
     } catch (error) {
