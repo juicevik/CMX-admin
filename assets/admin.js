@@ -11,7 +11,8 @@
     adminUsers: [],
     agentKeys: [],
     activeSiteId: '',
-    releaseStatusRequestSeq: 0
+    releaseStatusRequestSeq: 0,
+    medgenStatusBySite: {}
   };
   const siteContextRequiredPanels = ['main-workspace', 'editorial', 'product-cards', 'medgen', 'design', 'technical', 'content', 'workflow', 'modules', 'system'];
   const siteContextControlSelector = 'button, input, select, textarea';
@@ -69,6 +70,7 @@
     rateLimitVisible: false
   };
   const adminThemeStorageKey = 'cms.admin.theme';
+  const activeSiteStoragePrefix = 'cms.active.site.';
 
   function readJsonScript(id, errorLabel) {
     const node = document.getElementById(id);
@@ -210,6 +212,36 @@
     const repository = config && config.repository ? String(config.repository) : 'cms';
 
     return 'cms.github.token.' + repository;
+  }
+
+  function activeSiteStorageKey() {
+    const config = readGithubConfig();
+    const repository = config && config.repository ? String(config.repository) : 'cms';
+
+    return activeSiteStoragePrefix + repository;
+  }
+
+  function readStoredActiveSite() {
+    try {
+      return String(sessionStorage.getItem(activeSiteStorageKey()) || '').trim();
+    } catch (error) {
+      return '';
+    }
+  }
+
+  function writeStoredActiveSite(siteId) {
+    try {
+      const key = activeSiteStorageKey();
+      const value = String(siteId || '').trim();
+
+      if (value) {
+        sessionStorage.setItem(key, value);
+      } else {
+        sessionStorage.removeItem(key);
+      }
+    } catch (error) {
+      // Session storage is optional; the visible selector remains the source of truth.
+    }
   }
 
   function setGithubStatus(message) {
@@ -1218,6 +1250,67 @@
     return siteProfileById(adminState.activeSiteId);
   }
 
+  function activeSiteKey() {
+    const profile = activeSiteProfile();
+
+    return profile ? String(profile.site_id || '') : '';
+  }
+
+  function manifestContentSiteId() {
+    const manifest = adminState.manifest || {};
+    const contentSite = manifest.content_site && typeof manifest.content_site === 'object'
+      ? manifest.content_site
+      : {};
+
+    return String(contentSite.site_id || manifest.current_site_id || '').trim();
+  }
+
+  function itemSiteId(item) {
+    if (!item || typeof item !== 'object') {
+      return '';
+    }
+
+    return String(item.site_id || item.active_site_id || item.profile_id || '').trim();
+  }
+
+  function belongsToActiveSite(item) {
+    const selected = activeSiteKey();
+
+    if (!selected) {
+      return false;
+    }
+
+    const explicit = itemSiteId(item);
+
+    if (explicit) {
+      return explicit === selected;
+    }
+
+    const contentSiteId = manifestContentSiteId();
+
+    return contentSiteId ? contentSiteId === selected : true;
+  }
+
+  function scopedPagesList(pages) {
+    return Array.isArray(pages) ? pages.filter((page) => belongsToActiveSite(page)) : [];
+  }
+
+  function scopedContracts(contracts) {
+    if (!contracts || typeof contracts !== 'object') {
+      return contracts;
+    }
+
+    return Object.assign({}, contracts, {
+      pages: scopedPagesList(contracts.pages)
+    });
+  }
+
+  function activeSiteLabel() {
+    const profile = activeSiteProfile();
+
+    return profile ? siteProfileOptionLabel(profile) : 'сайт не выбран';
+  }
+
   function siteContextError() {
     return {
       ok: false,
@@ -1406,11 +1499,38 @@
 
   function setActiveSite(siteId) {
     const profile = siteProfileById(siteId);
+    const previous = adminState.activeSiteId;
 
     adminState.activeSiteId = profile ? String(profile.site_id || '') : '';
+    writeStoredActiveSite(adminState.activeSiteId);
     syncSiteScopedDefaults(profile);
     renderSiteWorkflow(adminState.manifest || {});
     renderSiteFleet(adminState.manifest || {});
+    renderAdminMetrics(adminState.manifest || {});
+
+    if (previous !== adminState.activeSiteId) {
+      resetEditorialWidgetState();
+      productCardState.visibleFields = [];
+      productCardState.editFieldValues = {};
+      productCardState.editMedia = {};
+      productCardState.media = {};
+      productCardState.lastQueuePayload = null;
+    }
+
+    renderPages(scopedPagesList((adminState.manifest || {}).pages || []));
+
+    if (adminState.actionContracts) {
+      fillEditorialPageSelects(adminState.actionContracts);
+      fillProductCardPageSelect(adminState.actionContracts);
+      refreshPageSelect(adminState.actionContracts);
+      renderWorkflowPages(adminState.actionContracts);
+      renderEditorialMatrix(adminState.actionContracts);
+      renderEditorialLinking(adminState.actionContracts);
+      setEditorialOutput(currentEditorialPayload(adminState.actionContracts));
+      renderProductCardMatrix(adminState.actionContracts);
+      renderProductCardFieldInputs(adminState.actionContracts);
+      setProductCardOutput(currentProductCardPayload(adminState.actionContracts));
+    }
   }
 
   function isSiteContextControlExempt(control) {
@@ -1527,6 +1647,196 @@
     };
   }
 
+  function stageWidgetElement(kind) {
+    return document.querySelector('[data-stage-widget="' + kind + '"]');
+  }
+
+  function setStageWidget(kind, state, summary, detail, actionLabel) {
+    const widget = stageWidgetElement(kind);
+
+    if (!widget) {
+      return;
+    }
+
+    const normalizedState = state || 'idle';
+    const summaryNode = widget.querySelector('[data-stage-widget-summary]');
+    const detailNode = widget.querySelector('[data-stage-widget-detail]');
+    const popoverNode = widget.querySelector('[data-stage-widget-popover]');
+    const action = widget.querySelector('[data-stage-widget-action]');
+
+    widget.dataset.stageState = normalizedState;
+    widget.title = detail || summary || '';
+
+    if (summaryNode) {
+      summaryNode.value = summary || '';
+      summaryNode.textContent = summary || '';
+    }
+
+    if (detailNode) {
+      detailNode.textContent = detail || '';
+    }
+
+    if (popoverNode) {
+      popoverNode.textContent = detail || summary || '';
+    }
+
+    if (action instanceof HTMLButtonElement) {
+      action.hidden = !actionLabel;
+      action.textContent = actionLabel || '';
+      action.dataset.stageAction = actionLabel
+        ? (/deploy/i.test(String(actionLabel)) ? 'deploy' : 'refresh')
+        : '';
+    }
+  }
+
+  function siteStageFromReleaseStatus(profile, status) {
+    if (!profile) {
+      return {
+        state: 'blocked',
+        summary: 'Сайт не выбран',
+        detail: 'Сначала выберите домен в первом блоке. Остальные разделы будут заблокированы.'
+      };
+    }
+
+    if (hostingProvider(profile) !== 'cloudflare_pages') {
+      return {
+        state: 'ready',
+        summary: 'VPS mirror',
+        detail: 'Активный сайт использует SSH mirror. Cloudflare release status для него не нужен.'
+      };
+    }
+
+    if (!status) {
+      return {
+        state: 'idle',
+        summary: 'Ожидает проверки',
+        detail: 'Нажмите обновить, чтобы увидеть очередь публикации выбранного сайта.'
+      };
+    }
+
+    if (status.ok === false) {
+      return {
+        state: 'error',
+        summary: 'Нужна проверка',
+        detail: Array.isArray(status.issues) ? status.issues.join('; ') : 'Release status не загружен.'
+      };
+    }
+
+    const pending = Number(status.pending_package_count || 0);
+    const prepared = Number(status.prepared_package_count || releaseCount(status, 'release_prepared') || 0);
+    const deploying = releaseCount(status, 'pages_deploy_requested');
+    const failed = releaseCount(status, 'pages_deploy_failed');
+    const deployed = releaseCount(status, 'deployed');
+
+    if (failed > 0) {
+      return {
+        state: 'error',
+        summary: 'Есть ошибки deploy',
+        detail: 'Для выбранного сайта есть failed deploy пакеты: ' + failed + '. Откройте Release status ниже.',
+        action: 'Обновить'
+      };
+    }
+
+    if (deploying > 0) {
+      return {
+        state: 'running',
+        summary: 'Deploy идет',
+        detail: 'Cloudflare Pages deployment запрошен. Дождитесь завершения и обновите статус.'
+      };
+    }
+
+    if (prepared > 0) {
+      return {
+        state: 'ready',
+        summary: 'Готов к deploy',
+        detail: 'Runtime release подготовлен: ' + prepared + ' пакетов. Можно запросить Cloudflare Pages deploy.',
+        action: 'Deploy'
+      };
+    }
+
+    if (pending > 0) {
+      return {
+        state: 'pending',
+        summary: 'Есть правки',
+        detail: 'Нужно подготовить runtime release для ' + pending + ' опубликованных пакетов.',
+        action: 'Обновить'
+      };
+    }
+
+    return {
+      state: 'ready',
+      summary: deployed > 0 ? 'Опубликовано' : 'Чисто',
+      detail: deployed > 0
+        ? 'Последние пакеты выбранного сайта уже отмечены как deployed.'
+        : 'Новых правок для deploy по выбранному сайту нет.'
+    };
+  }
+
+  function updateSiteStageWidget(status) {
+    const state = siteStageFromReleaseStatus(activeSiteProfile(), status);
+
+    setStageWidget('site', state.state, state.summary, state.detail, state.action);
+  }
+
+  function updateMedGenStageWidget(state) {
+    const profile = activeSiteProfile();
+    const siteId = activeSiteKey();
+    const saved = siteId ? adminState.medgenStatusBySite[siteId] : null;
+
+    if (state && siteId) {
+      adminState.medgenStatusBySite[siteId] = state;
+    }
+
+    if (!profile) {
+      setStageWidget('medgen', 'blocked', 'Ожидает сайт', 'MedGen работает только после выбора активного сайта.', '');
+      return;
+    }
+
+    if (profile.medgen_profile && profile.medgen_profile.enabled === false) {
+      setStageWidget('medgen', 'idle', 'Выключен', 'В профиле выбранного сайта MedGen отключен.', '');
+      return;
+    }
+
+    const current = state || saved;
+
+    if (current) {
+      setStageWidget(
+        'medgen',
+        current.state || 'idle',
+        current.summary || 'MedGen',
+        current.detail || '',
+        current.action || ''
+      );
+      return;
+    }
+
+    setStageWidget(
+      'medgen',
+      'ready',
+      'Готов',
+      'Второй этап: создайте задачу MedGen для уже выбранного сайта, затем проверьте task_id и опубликуйте результат.',
+      ''
+    );
+  }
+
+  function wireStageWidgetActions() {
+    document.querySelectorAll('[data-stage-widget-action]').forEach((button) => {
+      if (!(button instanceof HTMLButtonElement) || button.dataset.stageWidgetBound === 'true') {
+        return;
+      }
+
+      button.dataset.stageWidgetBound = 'true';
+      button.addEventListener('click', () => {
+        if (button.dataset.stageAction === 'deploy') {
+          requestCloudflarePagesDeployForActiveSite();
+          return;
+        }
+
+        refreshReleaseStatusForActiveSite({ silent: false });
+      });
+    });
+  }
+
   function resetReleaseStatusView(message, state) {
     const elements = releaseStatusElements();
 
@@ -1555,6 +1865,14 @@
 
     if (elements.deployments) {
       elements.deployments.innerHTML = '<li>Cloudflare Pages deploy пока не запускался.</li>';
+    }
+
+    if (state === 'loading') {
+      setStageWidget('site', 'running', 'В работе', message, '');
+    } else if (state === 'error') {
+      updateSiteStageWidget({ ok: false, issues: [message] });
+    } else {
+      updateSiteStageWidget(null);
     }
   }
 
@@ -1675,6 +1993,8 @@
         return '<li><strong>' + escapeHtml(statusText) + '</strong><span>' + title + '</span></li>';
       });
     }
+
+    updateSiteStageWidget(status);
   }
 
   async function refreshReleaseStatusForActiveSite(options) {
@@ -1887,6 +2207,9 @@
     syncSiteScopedDefaults(profile);
     syncActiveHostingActions(profile);
     syncSiteContextGate(profile, profiles);
+    updateSiteStageWidget(null);
+    updateMedGenStageWidget();
+    wireStageWidgetActions();
     wireReleaseStatusPanel();
     refreshReleaseStatusForActiveSite({ silent: true });
   }
@@ -2255,12 +2578,14 @@
     }
 
     const current = selectedResource || pageSelect.value;
-    fillSelect(pageSelect, contracts.pages.map((page) => ({
+    const pages = scopedPagesList(contracts.pages);
+
+    fillSelect(pageSelect, pages.map((page) => ({
       value: page.resource,
       label: pageOptionLabel(page)
     })));
 
-    if (current && contracts.pages.some((page) => page.resource === current)) {
+    if (current && pages.some((page) => page.resource === current)) {
       pageSelect.value = current;
     }
   }
@@ -3604,6 +3929,13 @@
     const payload = collectMedGenPayload();
 
     setMedGenStatus(dryRun ? 'Проверяю MedGen payload...' : (isPoll ? 'Проверяю MedGen task_id...' : 'Создаю MedGen task_id...'));
+    updateMedGenStageWidget({
+      state: dryRun ? 'idle' : 'running',
+      summary: dryRun ? 'Проверка payload' : (isPoll ? 'Проверка task_id' : 'Создание task_id'),
+      detail: dryRun
+        ? 'Проверяется структура запроса без публикации.'
+        : 'Workflow должен завершиться быстро и не ждать 15-30 минут генерации MedGen.'
+    });
     setStatusBusy('admin-medgen-status', true);
 
     try {
@@ -3620,6 +3952,29 @@
 
       setMedGenOutput(result);
       setMedGenStatus(result.ok ? (isPoll ? 'Проверка MedGen запущена. Если задача готова, результат будет применен.' : 'MedGen task creation запущен. Workflow не будет ждать 15-30 минут.') : 'MedGen workflow не запущен.');
+      const medgenReady = result && (
+        result.status === 'succeeded'
+        || result.medgen_status === 'succeeded'
+        || (result.task && result.task.status === 'succeeded')
+      );
+      updateMedGenStageWidget(result.ok
+        ? {
+          state: medgenReady ? 'ready' : (isPoll ? 'pending' : (dryRun ? 'ready' : 'running')),
+          summary: medgenReady ? 'Контент готов' : (isPoll ? 'Ожидает результат' : (dryRun ? 'Payload готов' : 'Task создан')),
+          detail: medgenReady
+            ? 'MedGen вернул готовый результат для выбранного сайта. Проверьте preview и запустите deploy.'
+            : (isPoll
+              ? 'Проверка task_id запущена. Если MedGen еще работает, Actions не должны ждать долгую генерацию.'
+              : (dryRun
+                ? 'Payload валиден для выбранного сайта.'
+                : 'Task_id создан отдельно от долгого ожидания. Вернитесь позже и запустите проверку task_id.')),
+          action: medgenReady ? 'Deploy' : ''
+        }
+        : {
+          state: 'error',
+          summary: 'MedGen не запущен',
+          detail: Array.isArray(result.issues) ? result.issues.join('; ') : 'Workflow вернул ошибку.'
+        });
     } finally {
       setStatusBusy('admin-medgen-status', false);
     }
@@ -4194,7 +4549,7 @@
 
   function editorialPageOptions(contracts) {
     return contracts && Array.isArray(contracts.pages)
-      ? contracts.pages.filter((page) => page && page.resource && !page.create_mode)
+      ? contracts.pages.filter((page) => page && page.resource && !page.create_mode && belongsToActiveSite(page))
       : [];
   }
 
@@ -8139,8 +8494,11 @@
     const githubRateMessage = githubState.rateLimitVisible
       ? githubState.rateLimitMessage
       : (isGithubMode() ? 'Загрузка лимитов...' : 'GitHub не подключен');
-    const totalPages = Number(summary.total_pages || 0);
-    const publishedPages = Number(summary.published_pages || 0);
+    const scopedPages = scopedPagesList(manifest && manifest.pages ? manifest.pages : []);
+    const totalPages = activeSiteProfile() ? scopedPages.length : Number(summary.total_pages || 0);
+    const publishedPages = activeSiteProfile()
+      ? scopedPages.filter((page) => String(page.status || '') === 'published').length
+      : Number(summary.published_pages || 0);
     const modules = Number(summary.modules || 0);
     const sites = manifest && Array.isArray(manifest.sites) ? manifest.sites.length : 0;
     const statusMessage = totalPages || modules
@@ -8188,6 +8546,10 @@
       return;
     }
 
+    const emptyText = activeSiteProfile()
+      ? 'Для выбранного сайта нет страниц в текущем bootstrap. Выберите профиль, совпадающий с content_site, или загрузите структуру этого сайта через Cloudflare runtime.'
+      : 'Сначала выберите домен в блоке "Рабочий сценарий CMS".';
+
     target.innerHTML = Array.isArray(pages) && pages.length > 0
       ? pages.map((page) => '<article class="page-row" data-page-row data-page-title="' + escapeHtml(page.title || '')
         + '" data-page-route="' + escapeHtml(page.route || '')
@@ -8199,7 +8561,7 @@
         + '<div class="page-row__actions"><a class="page-row__edit" href="#admin-editorial" data-edit-page="' + escapeHtml(page.path || page.resource || '') + '">Редактировать</a></div></div>'
         + '<ol class="module-flow">' + renderModuleFlow(page.modules || []) + '</ol>'
         + '</article>').join('')
-      : '<p class="empty-state">Pages are unavailable for this session.</p>';
+      : '<p class="empty-state">' + escapeHtml(emptyText) + '</p>';
   }
 
   function renderWorkflowActions(contracts) {
@@ -8222,20 +8584,20 @@
 
   function renderWorkflowPages(contracts) {
     const target = document.querySelector('[data-workflow-pages]');
-    const pages = contracts && Array.isArray(contracts.pages) ? contracts.pages : [];
+    const pages = contracts && Array.isArray(contracts.pages) ? scopedPagesList(contracts.pages) : [];
 
     if (!target) {
       return;
     }
 
-    target.innerHTML = pages.map((page) => '<details class="workflow-page">'
+    target.innerHTML = pages.length > 0 ? pages.map((page) => '<details class="workflow-page">'
       + '<summary>' + escapeHtml(page.route || page.resource || '') + '</summary>'
       + '<div><span class="pill">' + escapeHtml(page.page_type || '') + '</span>'
       + '<h3>' + escapeHtml(page.title || '') + '</h3>'
       + '<p><code>' + escapeHtml(page.resource || '') + '</code></p></div>'
       + '<dl><dt>Draft</dt><dd><code>' + escapeHtml(page.draft_path || '') + '</code></dd>'
       + '<dt>Preview</dt><dd><code>' + escapeHtml(page.preview_path || '') + '</code></dd></dl>'
-      + '</details>').join('');
+      + '</details>').join('') : '<p class="empty-state">Выберите домен, чтобы увидеть workflow-страницы именно этого сайта.</p>';
   }
 
   function renderModules(modules) {
@@ -9319,8 +9681,15 @@
     adminState.actionContracts = contracts;
     adminState.authContract = authContract;
     adminState.agentKeys = Array.isArray(manifest.agent_keys) ? manifest.agent_keys : [];
+    if (!adminState.activeSiteId) {
+      const storedSiteId = readStoredActiveSite();
+      if (storedSiteId && siteProfileById(storedSiteId)) {
+        adminState.activeSiteId = storedSiteId;
+      }
+    }
     if (adminState.activeSiteId && !siteProfileById(adminState.activeSiteId)) {
       adminState.activeSiteId = '';
+      writeStoredActiveSite('');
     }
     setGatedVisible(true);
     renderAdminMetrics(manifest);
@@ -9328,7 +9697,7 @@
       loadGithubRateLimit();
     }
     renderTypeOptions(manifest.page_types || []);
-    renderPages(manifest.pages || []);
+    renderPages(scopedPagesList(manifest.pages || []));
     renderWorkflowActions(contracts);
     renderWorkflowPages(contracts);
     renderModules(manifest.modules || []);
