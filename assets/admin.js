@@ -5374,7 +5374,8 @@
   function enhanceMetricHelp() {
     const helps = {
       'Статус': 'Показывает короткое состояние панели. Если текст длинный, он прокручивается внутри карточки.',
-      'Контент': 'Показывает общее количество страниц, опубликованные страницы и сколько сайтов сейчас зарегистрировано в панели.',
+      'Сайты': 'Без выбранного домена показывает общую статистику: сколько live-страниц есть в панели и сколько сайтов зарегистрировано.',
+      'Сайт': 'После выбора домена показывает статистику конкретного сайта: технические страницы, карточки товаров и общее число live-страниц.',
       'Версия': 'Версия сборщика админки и схемы панели.',
       'Лимиты': 'Показывает главный расходуемый лимит GitHub Actions и контрольный лимит Cloudflare Workers для CMS API.'
     };
@@ -8757,6 +8758,49 @@
       + (detail ? '<small>' + escapeHtml(detail) + '</small>' : '') + '</article>';
   }
 
+  function pageIsLive(page) {
+    return String(page && page.status ? page.status : '') === 'published';
+  }
+
+  function pageIsTechnical(page) {
+    return String(page && page.page_type ? page.page_type : '') === 'technical';
+  }
+
+  function pageIsProductCard(page) {
+    return editorialContentTypeForPage(page) === 'product';
+  }
+
+  function livePagesFromManifest(manifest) {
+    return manifest && Array.isArray(manifest.pages)
+      ? manifest.pages.filter(pageIsLive)
+      : [];
+  }
+
+  function siteContentMetric(manifest, summary) {
+    const profile = activeSiteProfile();
+    const sites = manifest && Array.isArray(manifest.sites) ? manifest.sites.length : 0;
+
+    if (profile) {
+      const scopedLivePages = scopedPagesList(manifest && manifest.pages ? manifest.pages : []).filter(pageIsLive);
+      const technicalPages = scopedLivePages.filter(pageIsTechnical).length;
+      const productPages = scopedLivePages.filter(pageIsProductCard).length;
+
+      return {
+        label: 'Сайт',
+        value: technicalPages + '/' + productPages,
+        detail: 'технические / карточки товаров · live ' + scopedLivePages.length
+      };
+    }
+
+    const livePages = Number(summary.published_pages || 0) || livePagesFromManifest(manifest).length;
+
+    return {
+      label: 'Сайты',
+      value: livePages + '/' + sites,
+      detail: 'live-страниц / сайтов всего'
+    };
+  }
+
   function githubMetricHtml(value) {
     return '<article class="metric metric--github-rate" data-github-rate-limit data-rate-state="' + (githubState.rateLimitVisible ? 'ready' : 'pending') + '">'
       + '<h1>Лимиты</h1><h3 data-github-rate-limit-value>' + escapeHtml(value) + '</h3></article>';
@@ -8773,26 +8817,32 @@
     const githubRateMessage = githubState.rateLimitVisible
       ? githubState.rateLimitMessage
       : (isGithubMode() ? 'Загрузка лимитов...' : 'GitHub не подключен');
+    const profile = activeSiteProfile();
     const scopedPages = scopedPagesList(manifest && manifest.pages ? manifest.pages : []);
-    const totalPages = activeSiteProfile() ? scopedPages.length : Number(summary.total_pages || 0);
-    const publishedPages = activeSiteProfile()
-      ? scopedPages.filter((page) => String(page.status || '') === 'published').length
+    const totalPages = profile ? scopedPages.length : Number(summary.total_pages || 0);
+    const publishedPages = profile
+      ? scopedPages.filter(pageIsLive).length
       : Number(summary.published_pages || 0);
     const modules = Number(summary.modules || 0);
     const sites = manifest && Array.isArray(manifest.sites) ? manifest.sites.length : 0;
+    const contentMetric = siteContentMetric(manifest, summary);
     const statusMessage = totalPages || modules
       ? 'Готово'
       : 'Ожидание';
     const statusDetail = totalPages || modules
-      ? 'Краткая сводка: структура загружена, редактор готов. Страницы ' + totalPages + ', опубликовано ' + publishedPages + ', сайтов ' + sites + '.'
+      ? (profile
+          ? 'Активный сайт: ' + activeSiteLabel() + '. Страниц ' + totalPages + ', live ' + publishedPages + '.'
+          : 'Краткая сводка: структура загружена. Live-страниц ' + publishedPages + ', сайтов ' + sites + '.')
       : 'Данные еще загружаются';
 
     target.innerHTML = [
       metricHtml('Статус', statusMessage, statusDetail, 'metric--status'),
-      metricHtml('Контент', totalPages + '/' + publishedPages, 'страниц / опубликовано · сайтов ' + sites),
+      metricHtml(contentMetric.label, contentMetric.value, contentMetric.detail),
       metricHtml('Версия', manifest && manifest.version ? manifest.version : 'n/a'),
       githubMetricHtml(githubRateMessage)
     ].join('');
+
+    enhanceMetricHelp();
   }
 
   function renderTypeOptions(pageTypes) {
