@@ -1380,6 +1380,55 @@
     return provider + ' / ' + environment;
   }
 
+  function releaseProfile(profile) {
+    return profile && profile.release && typeof profile.release === 'object'
+      ? profile.release
+      : {};
+  }
+
+  function releaseStatusLabel(profile) {
+    const release = releaseProfile(profile);
+
+    return String(release.last_deploy_status || profile.status || 'draft');
+  }
+
+  function releaseHistoryLabel(profile) {
+    const history = Array.isArray(releaseProfile(profile).status_history)
+      ? releaseProfile(profile).status_history
+      : [];
+    const entry = history[0] && typeof history[0] === 'object' ? history[0] : null;
+
+    if (!entry) {
+      return 'history pending';
+    }
+
+    return String(entry.operation || 'site_update') + ' · ' + String(entry.at || '');
+  }
+
+  function firstWorkflowLink(profile) {
+    const release = releaseProfile(profile);
+    const links = Array.isArray(release.workflow_links) ? release.workflow_links : [];
+    const first = links.find((link) => link && typeof link === 'object' && link.url);
+    const fallback = release.last_workflow_run_url
+      ? { label: 'Workflow', url: release.last_workflow_run_url }
+      : null;
+
+    const link = first || fallback;
+    const url = link ? safeHttpHref(link.url) : '';
+
+    return url ? { label: link.label || 'Workflow', url } : null;
+  }
+
+  function safeHttpHref(value) {
+    try {
+      const url = new URL(String(value || ''), window.location.href);
+
+      return ['https:', 'http:'].includes(url.protocol) ? url.href : '';
+    } catch (error) {
+      return '';
+    }
+  }
+
   function deployProfile(profile) {
     return profile && profile.deploy_profile && typeof profile.deploy_profile === 'object'
       ? profile.deploy_profile
@@ -2473,6 +2522,11 @@
           + '<dt>Domain</dt><dd>' + escapeHtml(item.domain || '-') + '</dd>'
           + '<dt>Locale</dt><dd>' + escapeHtml(item.root_locale || '-') + '</dd>'
           + '<dt>Deploy</dt><dd>' + escapeHtml(profileDeployLabel(item)) + '</dd>'
+          + '<dt>Release</dt><dd>' + escapeHtml(releaseStatusLabel(item)) + '</dd>'
+          + '<dt>History</dt><dd>' + escapeHtml(releaseHistoryLabel(item)) + '</dd>'
+          + (firstWorkflowLink(item)
+            ? '<dt>Status</dt><dd><a href="' + escapeHtml(firstWorkflowLink(item).url) + '" target="_blank" rel="noreferrer noopener">' + escapeHtml(firstWorkflowLink(item).label || 'Workflow') + '</a></dd>'
+            : '')
           + '<dt>SEO</dt><dd>' + escapeHtml((item.seo && item.seo.hreflang_policy) || 'single_locale_only') + '</dd>'
           + '</dl>'
           + '</article>';
