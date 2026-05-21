@@ -1558,6 +1558,7 @@
     renderSiteWorkflow(adminState.manifest || {});
     renderSiteFleet(adminState.manifest || {});
     renderAdminMetrics(adminState.manifest || {});
+    setSectionCounts(adminState.manifest || {}, adminState.actionContracts || {});
 
     if (previous !== adminState.activeSiteId) {
       resetEditorialWidgetState();
@@ -9914,7 +9915,9 @@
   }
 
   function setSectionCounts(manifest, contracts) {
-    const pages = manifest && Array.isArray(manifest.pages) ? manifest.pages.length : 0;
+    const manifestPages = manifest && Array.isArray(manifest.pages) ? manifest.pages : [];
+    const contractPages = contracts && Array.isArray(contracts.pages) ? contracts.pages : [];
+    const pages = activeSiteProfile() ? scopedPagesList(manifestPages).length : manifestPages.length;
     const modules = manifest && Array.isArray(manifest.modules) ? manifest.modules.length : 0;
     const actions = contracts && contracts.actions ? Object.keys(contracts.actions).length : 0;
     const createTemplates = contracts && Array.isArray(contracts.create_templates) ? contracts.create_templates.length : 0;
@@ -9922,9 +9925,8 @@
       ? contracts.editorial_widget.content_types.length
       : 0;
     const system = manifest && manifest.runtime ? Object.keys(manifest.runtime).length : 0;
-    const productCards = contracts && Array.isArray(contracts.pages)
-      ? contracts.pages.filter((page) => editorialContentTypeForPage(page) === 'product').length
-      : 0;
+    const productScope = activeSiteProfile() ? scopedPagesList(contractPages) : contractPages;
+    const productCards = productScope.filter((page) => editorialContentTypeForPage(page) === 'product').length;
     const sites = manifest && Array.isArray(manifest.sites) ? manifest.sites.length : 0;
     const values = { 'site-workflow': 5, 'main-workspace': editorialTypes + productCards, editorial: editorialTypes, 'product-cards': productCards, 'role-permissions': 6, 'site-launch': 6, medgen: 4, sites, content: pages, workflow: actions + createTemplates, modules, design: 2, system, technical: pages + modules + actions };
 
