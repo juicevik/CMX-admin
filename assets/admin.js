@@ -12,6 +12,7 @@
     agentKeys: [],
     activeSiteId: '',
     releaseStatusRequestSeq: 0,
+    directUploadBundlesBySite: {},
     medgenStatusBySite: {}
   };
   const siteContextRequiredPanels = ['main-workspace', 'editorial', 'product-cards', 'medgen', 'design', 'technical', 'content', 'workflow', 'modules', 'system'];
@@ -1643,7 +1644,12 @@
       deployments: document.querySelector('[data-release-status-deployments]'),
       refresh: document.querySelector('[data-release-status-refresh]'),
       prepare: document.querySelector('[data-runtime-release-prepare]'),
-      deploy: document.querySelector('[data-cloudflare-pages-deploy]')
+      deploy: document.querySelector('[data-cloudflare-pages-deploy]'),
+      directUploadFile: document.querySelector('[data-direct-upload-file]'),
+      directUploadJson: document.querySelector('[data-direct-upload-json]'),
+      directUploadPreview: document.querySelector('[data-direct-upload-preview]'),
+      directUploadDeploy: document.querySelector('[data-direct-upload-deploy]'),
+      directUploadStatus: document.querySelector('[data-direct-upload-status]')
     };
   }
 
@@ -2136,10 +2142,159 @@
     return result;
   }
 
+  function setDirectUploadStatus(message, state, deployEnabled) {
+    const elements = releaseStatusElements();
+
+    if (elements.directUploadStatus) {
+      elements.directUploadStatus.value = message;
+      elements.directUploadStatus.textContent = message;
+      elements.directUploadStatus.dataset.directUploadState = state || 'idle';
+    }
+
+    if (elements.directUploadDeploy instanceof HTMLButtonElement) {
+      elements.directUploadDeploy.disabled = deployEnabled !== true;
+    }
+  }
+
+  function parseDirectUploadBundle(raw) {
+    let bundle;
+
+    try {
+      bundle = JSON.parse(raw);
+    } catch (error) {
+      throw new Error('Bundle JSON не читается: ' + (error && error.message ? error.message : String(error)));
+    }
+
+    const files = bundle
+      && bundle.direct_upload
+      && Array.isArray(bundle.direct_upload.files)
+        ? bundle.direct_upload.files
+        : null;
+
+    if (!files || files.length === 0) {
+      throw new Error('В bundle нет direct_upload.files.');
+    }
+
+    files.forEach((file, index) => {
+      if (!file || typeof file !== 'object') {
+        throw new Error('Файл #' + (index + 1) + ' должен быть объектом.');
+      }
+
+      if (!file.path || !file.content_base64) {
+        throw new Error('Файл #' + (index + 1) + ' должен иметь path и content_base64.');
+      }
+
+      const path = String(file.path);
+      if (path.indexOf('..') !== -1 || path.indexOf('\\') !== -1 || path.indexOf('/') === 0) {
+        throw new Error('Небезопасный путь в bundle: ' + path);
+      }
+
+      const isSpecial = path === '_headers' || path === '_redirects' || path === '_routes.json';
+      if (!isSpecial && !file.hash) {
+        throw new Error('Файл ' + path + ' должен иметь hash.');
+      }
+    });
+
+    return bundle;
+  }
+
+  function summarizeDirectUploadBundle(bundle) {
+    const files = bundle.direct_upload.files || [];
+    const special = files.filter((file) => {
+      const path = String(file && file.path ? file.path : '');
+      return path === '_headers' || path === '_redirects' || path === '_routes.json';
+    }).length;
+    const bytes = files.reduce((total, file) => total + Number(file && file.size ? file.size : 0), 0);
+    const project = bundle.pages_project || 'pages_project из активного сайта';
+
+    return {
+      files: files.length,
+      special,
+      bytes,
+      project,
+      text: 'Bundle готов: ' + files.length + ' файлов, special ' + special + ', ' + bytes + ' bytes, project ' + project + '.'
+    };
+  }
+
+  function activeSiteDirectUploadKey() {
+    return activeSiteKey() || cloudflareSiteIdFromProfile(activeSiteProfile()) || '';
+  }
+
+  function previewDirectUploadBundle() {
+    const elements = releaseStatusElements();
+    const siteKey = activeSiteDirectUploadKey();
+
+    if (!siteKey) {
+      setDirectUploadStatus('Сначала выберите активный Cloudflare Pages сайт.', 'error', false);
+      return null;
+    }
+
+    if (!elements.directUploadJson || !String(elements.directUploadJson.value || '').trim()) {
+      setDirectUploadStatus('Вставьте JSON bundle или выберите файл.', 'error', false);
+      return null;
+    }
+
+    try {
+      const bundle = parseDirectUploadBundle(String(elements.directUploadJson.value || ''));
+      const summary = summarizeDirectUploadBundle(bundle);
+      adminState.directUploadBundlesBySite[siteKey] = bundle;
+      setDirectUploadStatus(summary.text, 'ready', true);
+      return bundle;
+    } catch (error) {
+      setDirectUploadStatus(error && error.message ? error.message : String(error), 'error', false);
+      return null;
+    }
+  }
+
+  async function requestDirectUploadBundleDeployForActiveSite() {
+    const profile = activeSiteProfile();
+    const siteKey = activeSiteDirectUploadKey();
+    const elements = releaseStatusElements();
+    const bundle = adminState.directUploadBundlesBySite[siteKey] || previewDirectUploadBundle();
+
+    if (!bundle || !profile || hostingProvider(profile) !== 'cloudflare_pages') {
+      setDirectUploadStatus('Direct Upload bundle доступен только для выбранного Cloudflare Pages сайта.', 'error', false);
+      return { ok: false, issues: ['cloudflare_pages_site_required'] };
+    }
+
+    const siteId = cloudflareSiteIdFromProfile(profile);
+    const deploy = profile && profile.deploy_profile ? profile.deploy_profile : {};
+    const cloudflare = deploy && deploy.cloudflare ? deploy.cloudflare : {};
+    const summary = summarizeDirectUploadBundle(bundle);
+
+    if (!siteId || !cloudflare.pages_project) {
+      setDirectUploadStatus('Для deploy нужен активный site_id и pages_project.', 'error', false);
+      return { ok: false, issues: ['site_context_or_pages_project_required'] };
+    }
+
+    setDirectUploadStatus('Отправляю bundle в Cloudflare Worker без GitHub Actions...', 'loading', false);
+    resetReleaseStatusView('Отправляю prebuilt bundle в Cloudflare Pages Direct Upload...', 'loading');
+
+    const payload = Object.assign({}, bundle, {
+      request_id: bundle.request_id || 'pages-direct-' + Date.now(),
+      pages_project: cloudflare.pages_project || bundle.pages_project || '',
+      branch: cloudflare.branch || bundle.branch || '',
+      source: 'admin_prebuilt_bundle'
+    });
+    const result = await cloudflareRequestPagesDeployment(siteId, payload);
+
+    if (result && result.ok) {
+      setDirectUploadStatus('Bundle опубликован: ' + summary.files + ' файлов. GitHub Actions не запускались.', 'done', true);
+      resetReleaseStatusView('Cloudflare Pages Direct Upload запрошен: ' + summary.files + ' файлов.', 'prepared');
+    } else {
+      const issues = result && Array.isArray(result.issues) ? result.issues.join('; ') : 'pages deployment endpoint недоступен';
+      setDirectUploadStatus('Deploy bundle не выполнен: ' + issues, 'error', true);
+      resetReleaseStatusView('Deploy bundle не выполнен: ' + issues, 'error');
+    }
+
+    await refreshReleaseStatusForActiveSite({ silent: true });
+    return result;
+  }
+
   function wireReleaseStatusPanel() {
     const elements = releaseStatusElements();
 
-    if (!elements.refresh && !elements.prepare && !elements.deploy) {
+    if (!elements.refresh && !elements.prepare && !elements.deploy && !elements.directUploadPreview && !elements.directUploadDeploy) {
       return;
     }
 
@@ -2161,6 +2316,43 @@
       elements.deploy.dataset.cloudflarePagesDeployBound = 'true';
       elements.deploy.addEventListener('click', () => {
         requestCloudflarePagesDeployForActiveSite();
+      });
+    }
+
+    if (elements.directUploadFile && elements.directUploadFile.dataset.directUploadFileBound !== 'true') {
+      elements.directUploadFile.dataset.directUploadFileBound = 'true';
+      elements.directUploadFile.addEventListener('change', async () => {
+        const file = elements.directUploadFile.files && elements.directUploadFile.files[0]
+          ? elements.directUploadFile.files[0]
+          : null;
+
+        if (!file) {
+          return;
+        }
+
+        try {
+          const text = await file.text();
+          if (elements.directUploadJson) {
+            elements.directUploadJson.value = text;
+          }
+          previewDirectUploadBundle();
+        } catch (error) {
+          setDirectUploadStatus('Файл bundle не прочитан: ' + (error && error.message ? error.message : String(error)), 'error', false);
+        }
+      });
+    }
+
+    if (elements.directUploadPreview && elements.directUploadPreview.dataset.directUploadPreviewBound !== 'true') {
+      elements.directUploadPreview.dataset.directUploadPreviewBound = 'true';
+      elements.directUploadPreview.addEventListener('click', () => {
+        previewDirectUploadBundle();
+      });
+    }
+
+    if (elements.directUploadDeploy && elements.directUploadDeploy.dataset.directUploadDeployBound !== 'true') {
+      elements.directUploadDeploy.dataset.directUploadDeployBound = 'true';
+      elements.directUploadDeploy.addEventListener('click', () => {
+        requestDirectUploadBundleDeployForActiveSite();
       });
     }
   }

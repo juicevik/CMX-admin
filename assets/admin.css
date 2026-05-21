@@ -3105,6 +3105,87 @@ body[data-site-context="missing"] .site-workflow__active select {
   font-weight: 850;
 }
 
+.site-workflow__direct-upload {
+  padding: var(--admin-space-3);
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-control);
+  background: color-mix(in srgb, var(--admin-surface-muted) 68%, transparent);
+}
+
+.site-workflow__direct-upload summary {
+  cursor: pointer;
+  color: var(--admin-text);
+  font-size: 0.86rem;
+  font-weight: 950;
+}
+
+.site-workflow__direct-upload p {
+  margin: var(--admin-space-2) 0 var(--admin-space-3);
+  color: var(--admin-muted);
+  font-size: 0.78rem;
+}
+
+.site-workflow__direct-upload code {
+  color: var(--admin-text);
+  font-size: 0.76rem;
+}
+
+.site-workflow__direct-upload-grid {
+  display: grid;
+  grid-template-columns: minmax(12rem, 0.55fr) minmax(18rem, 1.45fr);
+  gap: var(--admin-space-3);
+  align-items: start;
+}
+
+.site-workflow__direct-upload label {
+  display: grid;
+  gap: 0.4rem;
+  color: var(--admin-text);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.site-workflow__direct-upload input,
+.site-workflow__direct-upload textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-control);
+  background: var(--admin-surface);
+  color: var(--admin-text);
+  font: inherit;
+}
+
+.site-workflow__direct-upload textarea {
+  resize: vertical;
+  min-height: 9rem;
+  padding: var(--admin-space-3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+}
+
+.site-workflow__direct-upload-actions {
+  display: flex;
+  gap: var(--admin-space-3);
+  margin-top: var(--admin-space-3);
+}
+
+.site-workflow__direct-upload output {
+  display: block;
+  margin-top: var(--admin-space-3);
+}
+
+.site-workflow__direct-upload output[data-direct-upload-state="ready"],
+.site-workflow__direct-upload output[data-direct-upload-state="done"] {
+  border-color: color-mix(in srgb, #20b26b 45%, var(--admin-border));
+  color: var(--admin-text);
+}
+
+.site-workflow__direct-upload output[data-direct-upload-state="error"] {
+  border-color: color-mix(in srgb, #d94747 48%, var(--admin-border));
+  color: var(--admin-danger);
+}
+
 .site-workflow__steps {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -3843,6 +3924,7 @@ body[data-site-context="missing"] .site-workflow__active select {
   .site-workflow__stage-widgets,
   .site-workflow__release-counts,
   .site-workflow__release-lists,
+  .site-workflow__direct-upload-grid,
   .site-fleet-cards {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -3901,6 +3983,7 @@ body[data-site-context="missing"] .site-workflow__active select {
   .site-workflow__stage-widgets,
   .site-workflow__release-counts,
   .site-workflow__release-lists,
+  .site-workflow__direct-upload-grid,
   .site-workflow__steps,
   .site-fleet-cards {
     grid-template-columns: 1fr;
