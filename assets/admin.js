@@ -2289,8 +2289,24 @@
   function medgenTaskPreviewUrl(taskRecord) {
     const task = taskRecord && taskRecord.task && typeof taskRecord.task === 'object' ? taskRecord.task : {};
     const preview = taskRecord && taskRecord.preview && typeof taskRecord.preview === 'object' ? taskRecord.preview : {};
+    const explicit = String(taskRecord && taskRecord.preview_url || task.preview_url || preview.preview_url || '').trim();
 
-    return String(taskRecord && taskRecord.preview_url || task.preview_url || preview.preview_url || '').trim();
+    if (explicit) {
+      return explicit;
+    }
+
+    if (!medgenTaskIsReady(taskRecord)) {
+      return '';
+    }
+
+    const profile = activeSiteProfile();
+    const deploy = profile && profile.deploy_profile && typeof profile.deploy_profile === 'object' ? profile.deploy_profile : {};
+    const cloudflare = deploy.cloudflare && typeof deploy.cloudflare === 'object' ? deploy.cloudflare : {};
+    const project = String(cloudflare.pages_project || activeSiteKey() || '').trim();
+    const pageKey = medgenTaskPageKey(taskRecord);
+    const route = medgenTaskRouteFromPageKey(pageKey, medgenTaskTitle(taskRecord));
+
+    return project && route ? 'https://' + project + '.pages.dev' + route : '';
   }
 
   function medgenTaskTitle(taskRecord) {
@@ -2305,6 +2321,36 @@
     const task = taskRecord && taskRecord.task && typeof taskRecord.task === 'object' ? taskRecord.task : {};
 
     return String(task.page_key || payload.page_key || '').trim();
+  }
+
+  function medgenTaskRouteFromPageKey(pageKey, title) {
+    const key = String(pageKey || '').trim().toLowerCase();
+    const mapped = {
+      about: 'about',
+      editorial_policy: 'editorial-policy',
+      experts: 'experts',
+      contact: 'contact',
+      methodology: 'methodology',
+      information_sources: 'information-sources',
+      affiliate_disclosure: 'affiliate-disclosure',
+      support: 'support',
+      faq: 'faq',
+      how_to_use: 'how-to-use',
+      suggest_supplement: 'suggest-supplement',
+      legal_information: 'legal-information',
+      disclaimer: 'disclaimer',
+      privacy_policy: 'privacy-policy',
+      terms_of_use: 'terms-of-use',
+      cookie_policy: 'cookie-policy'
+    };
+    const slug = mapped[key] || String(title || key || '')
+      .trim()
+      .toLowerCase()
+      .replace(/['"`]+/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+
+    return slug ? '/' + slug + '/' : '';
   }
 
   function medgenTaskType(taskRecord) {
@@ -2524,15 +2570,21 @@
             : 'MedGen preview не создан. Проверьте JSON ответа.');
 
           if (result && result.ok) {
-            const previewUrl = result.preview && result.preview.preview_url ? String(result.preview.preview_url) : '';
-
-            if (previewUrl) {
-              window.open(previewUrl, '_blank', 'noopener');
-            }
+            const previewUrl = String(
+              result.preview && result.preview.preview_url
+                ? result.preview.preview_url
+                : result.content_package && result.content_package.preview_url
+                  ? result.content_package.preview_url
+                  : ''
+            ).trim();
 
             await refreshRuntimeContentIndexForActiveSite({ silent: true, force: true });
             await refreshReleaseStatusForActiveSite({ silent: true });
             await refreshMedGenTaskIndexForActiveSite({ force: true });
+
+            if (previewUrl) {
+              window.location.assign(previewUrl);
+            }
           }
         } finally {
           button.disabled = false;
