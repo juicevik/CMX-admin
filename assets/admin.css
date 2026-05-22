@@ -3513,7 +3513,11 @@ body[data-site-context="missing"] .site-workflow__active select {
   white-space: nowrap;
 }
 
-.medgen-task-row button {
+.medgen-task-row button,
+.medgen-task-row a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 2rem;
   padding: 0 0.7rem;
   border: 1px solid color-mix(in srgb, var(--admin-accent) 48%, var(--admin-border));
@@ -3524,6 +3528,15 @@ body[data-site-context="missing"] .site-workflow__active select {
   font: inherit;
   font-size: 0.72rem;
   font-weight: 900;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.medgen-task-row__actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.4rem;
 }
 
 .domain-design__grid {
@@ -4217,7 +4230,9 @@ body[data-site-context="missing"] .site-workflow__active select {
 
   .medgen-task-row strong,
   .medgen-task-row small,
-  .medgen-task-row button {
+  .medgen-task-row button,
+  .medgen-task-row a,
+  .medgen-task-row__actions {
     grid-column: 2;
     white-space: normal;
   }

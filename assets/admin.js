@@ -2286,6 +2286,13 @@
     return String(task.task_id || taskRecord && taskRecord.task_id || '').trim();
   }
 
+  function medgenTaskPreviewUrl(taskRecord) {
+    const task = taskRecord && taskRecord.task && typeof taskRecord.task === 'object' ? taskRecord.task : {};
+    const preview = taskRecord && taskRecord.preview && typeof taskRecord.preview === 'object' ? taskRecord.preview : {};
+
+    return String(taskRecord && taskRecord.preview_url || task.preview_url || preview.preview_url || '').trim();
+  }
+
   function medgenTaskTitle(taskRecord) {
     const payload = medgenTaskPayload(taskRecord);
     const task = taskRecord && taskRecord.task && typeof taskRecord.task === 'object' ? taskRecord.task : {};
@@ -2370,10 +2377,13 @@
       const title = medgenTaskTitle(taskRecord);
       const pageKey = medgenTaskPageKey(taskRecord);
       const meta = [medgenTaskType(taskRecord), pageKey, id ? '#' + id.slice(0, 10) : ''].filter(Boolean).join(' · ');
+      const previewUrl = medgenTaskPreviewUrl(taskRecord);
 
-      const action = id && state === 'ready'
-        ? '<button type="button" data-medgen-task-preview="' + escapeHtml(id) + '">Preview</button>'
-        : (id ? '<button type="button" data-medgen-task-poll-row="' + escapeHtml(id) + '">Проверить</button>' : '');
+      const action = previewUrl
+        ? '<span class="medgen-task-row__actions"><a href="' + escapeHtml(previewUrl) + '" target="_blank" rel="noopener" data-medgen-task-preview-link="' + escapeHtml(id) + '">Посмотреть preview</a><button type="button" data-medgen-task-deploy="' + escapeHtml(id) + '">Deploy</button></span>'
+        : (id && state === 'ready'
+            ? '<button type="button" data-medgen-task-preview="' + escapeHtml(id) + '">Preview</button>'
+            : (id ? '<button type="button" data-medgen-task-poll-row="' + escapeHtml(id) + '">Проверить</button>' : ''));
 
       return '<article class="medgen-task-row" data-medgen-task-state="' + escapeHtml(state) + '">'
         + '<span class="medgen-task-row__lamp" aria-hidden="true"></span>'
@@ -2531,6 +2541,53 @@
       });
     });
 
+    document.querySelectorAll('[data-medgen-task-deploy]').forEach((button) => {
+      if (!(button instanceof HTMLButtonElement) || button.dataset.medgenTaskDeployBound === 'true') {
+        return;
+      }
+
+      button.dataset.medgenTaskDeployBound = 'true';
+      button.addEventListener('click', async () => {
+        const siteId = activeSiteKey();
+        const taskId = String(button.getAttribute('data-medgen-task-deploy') || '').trim();
+
+        if (!siteId || !taskId) {
+          setMedGenOutput({ ok: false, issues: ['site_id_or_task_id_missing'] });
+          return;
+        }
+
+        button.disabled = true;
+        button.textContent = 'Deploy...';
+        setMedGenStatus('Готовлю deploy MedGen preview для выбранного сайта без GitHub Actions.');
+
+        try {
+          const runtimeRelease = await prepareRuntimeReleaseForActiveSite();
+          const pagesDeploy = runtimeRelease && runtimeRelease.ok
+            ? await requestCloudflarePagesDeployForActiveSite({
+                source: 'medgen_task_monitor',
+                request_id: 'pages-deploy-medgen-' + Date.now()
+              })
+            : null;
+
+          setMedGenOutput({
+            ok: Boolean(runtimeRelease && runtimeRelease.ok && pagesDeploy && pagesDeploy.ok),
+            action: 'medgen_preview_deploy',
+            task_id: taskId,
+            runtime_release: runtimeRelease,
+            pages_deploy: pagesDeploy
+          });
+          setMedGenStatus(pagesDeploy && pagesDeploy.ok
+            ? 'Deploy для выбранного сайта запрошен через Cloudflare runtime. GitHub Actions не запускались.'
+            : 'Deploy не завершен. Проверьте release status и JSON ответа.');
+          await refreshReleaseStatusForActiveSite({ silent: true });
+          await refreshMedGenTaskIndexForActiveSite({ force: true });
+        } finally {
+          button.disabled = false;
+          button.textContent = 'Deploy';
+        }
+      });
+    });
+
     document.querySelectorAll('[data-medgen-task-poll-row]').forEach((button) => {
       if (!(button instanceof HTMLButtonElement) || button.dataset.medgenTaskPollRowBound === 'true') {
         return;
@@ -2598,8 +2655,15 @@
         result_ready: task.result_ready === true,
         has_result: task.has_result === true || task.result_ready === true,
         failed_stage: task.failed_stage || null,
-        error: task.error || null
-      }
+        error: task.error || null,
+        preview_url: task.preview_url || '',
+        preview_request_id: task.preview_request_id || '',
+        preview_status: task.preview_status || ''
+      },
+      preview: task.preview && typeof task.preview === 'object' ? task.preview : {},
+      preview_url: task.preview_url || '',
+      preview_request_id: task.preview_request_id || '',
+      preview_status: task.preview_status || ''
     };
   }
 
