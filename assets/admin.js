@@ -2288,12 +2288,20 @@
       return 'critical';
     }
 
-    if (['accepted', 'release_queued', 'release_prepared', 'pages_deploy_requested', 'deployed'].includes(previewStatus)) {
+    if (previewStatus === 'deployed' || previewStatus === 'cloudflare_pages_deployed') {
       return 'deployed';
+    }
+
+    if (previewStatus === 'pages_deploy_failed' || previewStatus === 'cloudflare_pages_deploy_failed') {
+      return 'critical';
     }
 
     if (previewStatus === 'preview_ready' || medgenTaskPreviewUrl(taskRecord) || status === 'succeeded') {
       return 'preview';
+    }
+
+    if (['accepted', 'release_queued', 'release_prepared', 'pages_deploy_requested', 'cloudflare_pages_deploy_requested', 'cloudflare_pages_deploy_building'].includes(previewStatus)) {
+      return 'generating';
     }
 
     if (status === 'queued' || status === 'running') {
