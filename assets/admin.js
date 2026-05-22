@@ -2357,6 +2357,7 @@
       + '<span>готово к preview: ' + escapeHtml(String(counts.ready)) + '</span>'
       + '<span>в работе: ' + escapeHtml(String(counts.active)) + '</span>'
       + '<span>ошибки: ' + escapeHtml(String(counts.failed)) + '</span>'
+      + '<button type="button" data-medgen-refresh-statuses>Проверить ответ MedGen</button>'
       + (counts.ready > 0 ? '<button type="button" data-medgen-preview-ready-all>Собрать ready preview</button>' : '')
       + '</div>';
 
@@ -2372,7 +2373,7 @@
 
       const action = id && state === 'ready'
         ? '<button type="button" data-medgen-task-preview="' + escapeHtml(id) + '">Preview</button>'
-        : (id ? '<button type="button" data-medgen-task-pick="' + escapeHtml(id) + '">Проверить</button>' : '');
+        : (id ? '<button type="button" data-medgen-task-poll-row="' + escapeHtml(id) + '">Проверить</button>' : '');
 
       return '<article class="medgen-task-row" data-medgen-task-state="' + escapeHtml(state) + '">'
         + '<span class="medgen-task-row__lamp" aria-hidden="true"></span>'
@@ -2416,6 +2417,27 @@
   }
 
   function wireMedGenTaskMonitor() {
+    document.querySelectorAll('[data-medgen-refresh-statuses]').forEach((button) => {
+      if (!(button instanceof HTMLButtonElement) || button.dataset.medgenRefreshStatusesBound === 'true') {
+        return;
+      }
+
+      button.dataset.medgenRefreshStatusesBound = 'true';
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        button.textContent = 'Проверяю...';
+        setMedGenStatus('Вручную проверяю MedGen-статусы выбранного сайта.');
+
+        try {
+          await refreshMedGenTaskIndexForActiveSite({ force: true, manual: true });
+          setMedGenStatus('MedGen-статусы обновлены для выбранного сайта.');
+        } finally {
+          button.disabled = false;
+          button.textContent = 'Проверить ответ MedGen';
+        }
+      });
+    });
+
     document.querySelectorAll('[data-medgen-preview-ready-all]').forEach((button) => {
       if (!(button instanceof HTMLButtonElement) || button.dataset.medgenPreviewReadyAllBound === 'true') {
         return;
@@ -2492,6 +2514,12 @@
             : 'MedGen preview не создан. Проверьте JSON ответа.');
 
           if (result && result.ok) {
+            const previewUrl = result.preview && result.preview.preview_url ? String(result.preview.preview_url) : '';
+
+            if (previewUrl) {
+              window.open(previewUrl, '_blank', 'noopener');
+            }
+
             await refreshRuntimeContentIndexForActiveSite({ silent: true, force: true });
             await refreshReleaseStatusForActiveSite({ silent: true });
             await refreshMedGenTaskIndexForActiveSite({ force: true });
@@ -2503,22 +2531,41 @@
       });
     });
 
-    document.querySelectorAll('[data-medgen-task-pick]').forEach((button) => {
-      if (!(button instanceof HTMLButtonElement) || button.dataset.medgenTaskPickBound === 'true') {
+    document.querySelectorAll('[data-medgen-task-poll-row]').forEach((button) => {
+      if (!(button instanceof HTMLButtonElement) || button.dataset.medgenTaskPollRowBound === 'true') {
         return;
       }
 
-      button.dataset.medgenTaskPickBound = 'true';
-      button.addEventListener('click', () => {
-        const taskId = String(button.getAttribute('data-medgen-task-pick') || '').trim();
+      button.dataset.medgenTaskPollRowBound = 'true';
+      button.addEventListener('click', async () => {
+        const siteId = activeSiteKey();
+        const taskId = String(button.getAttribute('data-medgen-task-poll-row') || '').trim();
         const field = byId('admin-medgen-task-id');
 
         if (field instanceof HTMLInputElement) {
           field.value = taskId;
-          field.focus();
         }
 
-        scrollToAdminSection('medgen', 'admin-medgen-task-id');
+        if (!siteId || !taskId) {
+          setMedGenOutput({ ok: false, issues: ['site_id_or_task_id_missing'] });
+          return;
+        }
+
+        button.disabled = true;
+        button.textContent = 'Проверяю...';
+
+        try {
+          const result = await cloudflarePollMedGenTask(siteId, taskId);
+
+          setMedGenOutput(result);
+          setMedGenStatus(result && result.ok
+            ? 'Task_id проверен через Worker. Статус строки обновлен.'
+            : 'Task_id не проверен. Смотрите JSON ответа.');
+          await refreshMedGenTaskIndexForActiveSite({ force: true, manual: true });
+        } finally {
+          button.disabled = false;
+          button.textContent = 'Проверить';
+        }
       });
     });
   }
