@@ -2237,22 +2237,27 @@
   function medgenTaskIsReady(taskRecord) {
     const status = medgenTaskStatus(taskRecord);
     const task = taskRecord && taskRecord.task && typeof taskRecord.task === 'object' ? taskRecord.task : {};
+    const payload = medgenTaskPayload(taskRecord);
+    const article = payload.article && typeof payload.article === 'object' ? payload.article : null;
 
-    return ['succeeded', 'finished', 'complete', 'completed', 'ready'].includes(status)
+    return status === 'succeeded' && (
+      task.result_ready === true
       || task.has_result === true
-      || task.has_article === true;
+      || task.has_article === true
+      || article !== null
+    );
   }
 
   function medgenTaskIsFailed(taskRecord) {
     const status = medgenTaskStatus(taskRecord);
 
-    return ['failed', 'error', 'cancelled', 'canceled', 'timeout'].includes(status);
+    return ['failed', 'error', 'timeout'].includes(status);
   }
 
   function medgenTaskIsActive(taskRecord) {
     const status = medgenTaskStatus(taskRecord);
 
-    return ['queued', 'accepted', 'pending', 'running', 'processing', 'in_progress', 'created'].includes(status)
+    return ['queued', 'running'].includes(status)
       || (!medgenTaskIsReady(taskRecord) && !medgenTaskIsFailed(taskRecord));
   }
 
@@ -2545,6 +2550,7 @@
         progress: task.progress || 0,
         result_ready: task.result_ready === true,
         has_result: task.has_result === true || task.result_ready === true,
+        failed_stage: task.failed_stage || null,
         error: task.error || null
       }
     };
