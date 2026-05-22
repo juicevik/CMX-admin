@@ -2261,6 +2261,58 @@
       || (!medgenTaskIsReady(taskRecord) && !medgenTaskIsFailed(taskRecord));
   }
 
+  function medgenTaskStage(taskRecord) {
+    const task = taskRecord && taskRecord.task && typeof taskRecord.task === 'object' ? taskRecord.task : {};
+
+    return String(task.stage || taskRecord.stage || '').trim().toLowerCase();
+  }
+
+  function medgenTaskFailedStage(taskRecord) {
+    const task = taskRecord && taskRecord.task && typeof taskRecord.task === 'object' ? taskRecord.task : {};
+
+    return String(task.failed_stage || taskRecord.failed_stage || '').trim();
+  }
+
+  function medgenTaskDisplayState(taskRecord) {
+    const status = medgenTaskStatus(taskRecord);
+
+    if (['failed', 'error', 'timeout'].includes(status)) {
+      return 'failed';
+    }
+
+    if (status === 'succeeded') {
+      return 'succeeded';
+    }
+
+    if (status === 'running') {
+      return 'running';
+    }
+
+    if (status === 'queued') {
+      return 'queued';
+    }
+
+    return 'unknown';
+  }
+
+  function medgenTaskOfficialStatusHtml(taskRecord) {
+    const status = medgenTaskStatus(taskRecord) || 'unknown';
+    const stage = medgenTaskStage(taskRecord) || 'unknown';
+    const progress = medgenTaskProgress(taskRecord);
+    const failedStage = medgenTaskFailedStage(taskRecord);
+    const lines = [
+      '<span>Status: <b>' + escapeHtml(status) + '</b></span>',
+      '<span>Stage: <b>' + escapeHtml(stage) + '</b></span>',
+      '<span>Progress: <b>' + escapeHtml(String(progress)) + '%</b></span>'
+    ];
+
+    if (failedStage) {
+      lines.push('<span>Failed: <b>' + escapeHtml(failedStage) + '</b></span>');
+    }
+
+    return lines.join('');
+  }
+
   function medgenTaskLabel(taskRecord) {
     const payload = medgenTaskPayload(taskRecord);
     const task = taskRecord && taskRecord.task && typeof taskRecord.task === 'object' ? taskRecord.task : {};
@@ -2411,15 +2463,15 @@
       + '<span>в работе: ' + escapeHtml(String(counts.active)) + '</span>'
       + '<span>ошибки: ' + escapeHtml(String(counts.failed)) + '</span>'
       + '<button type="button" data-medgen-refresh-statuses>Проверить ответ MedGen</button>'
-      + (counts.ready > 0 ? '<button type="button" data-medgen-preview-ready-all>Собрать ready preview</button>' : '')
+      + (counts.ready > 0 ? '<button type="button" data-medgen-select-all-preview>Отметить все</button>' : '')
+      + (counts.ready > 0 ? '<button type="button" data-medgen-preview-ready-all>Деплой всех PREVIEW</button>' : '')
       + '</div>';
 
     const rows = list.slice(0, 24).map((taskRecord) => {
       const id = medgenTaskId(taskRecord);
-      const status = medgenTaskStatus(taskRecord) || 'unknown';
-      const stage = (taskRecord.task && taskRecord.task.stage) || '';
       const progress = medgenTaskProgress(taskRecord);
-      const state = medgenTaskIsFailed(taskRecord) ? 'failed' : (medgenTaskIsReady(taskRecord) ? 'ready' : 'active');
+      const state = medgenTaskDisplayState(taskRecord);
+      const isReady = medgenTaskIsReady(taskRecord);
       const title = medgenTaskTitle(taskRecord);
       const pageKey = medgenTaskPageKey(taskRecord);
       const meta = [medgenTaskType(taskRecord), pageKey, id ? '#' + id.slice(0, 10) : ''].filter(Boolean).join(' · ');
@@ -2427,16 +2479,21 @@
 
       const action = previewUrl
         ? '<span class="medgen-task-row__actions"><a href="' + escapeHtml(previewUrl) + '" target="_blank" rel="noopener" data-medgen-task-preview-link="' + escapeHtml(id) + '">Посмотреть preview</a><button type="button" data-medgen-task-deploy="' + escapeHtml(id) + '">Deploy</button></span>'
-        : (id && state === 'ready'
-            ? '<button type="button" data-medgen-task-preview="' + escapeHtml(id) + '">Preview</button>'
+        : (id && isReady
+            ? '<button type="button" data-medgen-task-preview="' + escapeHtml(id) + '">Посмотреть preview</button>'
             : (id ? '<button type="button" data-medgen-task-poll-row="' + escapeHtml(id) + '">Проверить</button>' : ''));
+      const selector = '<label class="medgen-task-row__select" title="Отметьте страницу, чтобы включить ее в «Деплой всех PREVIEW».">'
+        + '<input type="checkbox" data-medgen-preview-select="' + escapeHtml(id) + '" ' + (isReady ? 'checked' : 'disabled') + '>'
+        + '<span>deploy</span>'
+        + '</label>';
 
       return '<article class="medgen-task-row" data-medgen-task-state="' + escapeHtml(state) + '">'
         + '<span class="medgen-task-row__lamp" aria-hidden="true"></span>'
         + '<div><h4>' + escapeHtml(title) + '</h4><p>' + escapeHtml(meta) + '</p></div>'
-        + '<strong>' + escapeHtml(status) + (stage ? ' / ' + escapeHtml(stage) : '') + '</strong>'
+        + '<strong class="medgen-task-row__status">' + medgenTaskOfficialStatusHtml(taskRecord) + '</strong>'
         + '<small>' + escapeHtml(String(progress)) + '%</small>'
         + action
+        + selector
         + '</article>';
     }).join('');
 
@@ -2472,6 +2529,126 @@
     wireMedGenTaskMonitor();
   }
 
+  function selectedMedGenPreviewTaskIds() {
+    return Array.from(document.querySelectorAll('[data-medgen-preview-select]'))
+      .filter((input) => input instanceof HTMLInputElement && input.checked && !input.disabled)
+      .map((input) => String(input.getAttribute('data-medgen-preview-select') || '').trim())
+      .filter(Boolean);
+  }
+
+  function medgenPreviewResultUrl(result) {
+    return String(
+      result && result.preview && result.preview.preview_url
+        ? result.preview.preview_url
+        : result && result.content_package && result.content_package.preview_url
+          ? result.content_package.preview_url
+          : result && result.preview_url
+            ? result.preview_url
+            : ''
+    ).trim();
+  }
+
+  function medgenPreviewResultRequestId(result) {
+    return String(
+      result && result.request_id
+        ? result.request_id
+        : result && result.preview && result.preview.request_id
+          ? result.preview.request_id
+          : result && result.content_package && result.content_package.request_id
+            ? result.content_package.request_id
+            : ''
+    ).trim();
+  }
+
+  function medgenPreviewAlreadyAccepted(result) {
+    const status = String(
+      result && result.content_package && result.content_package.status
+        ? result.content_package.status
+        : result && result.preview && result.preview.status
+          ? result.preview.status
+          : ''
+    ).trim();
+
+    return ['accepted', 'release_queued', 'release_prepared', 'pages_deploy_requested'].includes(status);
+  }
+
+  function openPreviewUrl(url, existingWindow) {
+    const href = String(url || '').trim();
+
+    if (!href) {
+      return;
+    }
+
+    if (existingWindow && !existingWindow.closed) {
+      existingWindow.location.href = href;
+      return;
+    }
+
+    const opened = window.open(href, '_blank', 'noopener');
+    if (!opened) {
+      window.location.assign(href);
+    }
+  }
+
+  async function deployMedGenPreviewTasks(siteId, taskIds, source) {
+    const ids = Array.from(new Set((Array.isArray(taskIds) ? taskIds : []).map((id) => String(id || '').trim()).filter(Boolean)));
+    const previewResults = [];
+    const publishResults = [];
+
+    if (!siteId || ids.length === 0) {
+      return { ok: false, issues: ['site_id_or_task_ids_missing'], task_ids: ids };
+    }
+
+    for (const taskId of ids) {
+      const preview = await cloudflareCreateMedGenPreview(siteId, taskId);
+      previewResults.push(Object.assign({ task_id: taskId }, preview || {}));
+
+      if (!preview || !preview.ok) {
+        publishResults.push({ ok: false, task_id: taskId, issues: ['preview_failed'] });
+        continue;
+      }
+
+      if (medgenPreviewAlreadyAccepted(preview)) {
+        publishResults.push({ ok: true, task_id: taskId, skipped: true, status: 'already_accepted' });
+        continue;
+      }
+
+      const requestId = medgenPreviewResultRequestId(preview);
+      const token = String(preview.preview_token || '').trim();
+
+      if (!requestId || !token) {
+        publishResults.push({ ok: false, task_id: taskId, request_id: requestId, issues: ['preview_approval_token_missing'] });
+        continue;
+      }
+
+      publishResults.push(await cloudflarePublish(siteId, {
+        request_id: requestId,
+        approval_token: token,
+        source: source || 'medgen_preview_deploy'
+      }));
+    }
+
+    const publishedOk = publishResults.length > 0 && publishResults.every((result) => result && result.ok);
+    const runtimeRelease = publishedOk ? await prepareRuntimeReleaseForActiveSite() : null;
+    const pagesDeploy = runtimeRelease && runtimeRelease.ok
+      ? await requestCloudflarePagesDeployForActiveSite({
+          source: source || 'medgen_preview_deploy',
+          request_id: 'pages-deploy-medgen-' + Date.now()
+        })
+      : null;
+
+    return {
+      ok: Boolean(publishedOk && runtimeRelease && runtimeRelease.ok && pagesDeploy && pagesDeploy.ok),
+      action: source || 'medgen_preview_deploy',
+      site_id: siteId,
+      task_ids: ids,
+      preview_results: previewResults,
+      publish_results: publishResults,
+      runtime_release: runtimeRelease,
+      pages_deploy: pagesDeploy
+    };
+  }
+
   function wireMedGenTaskMonitor() {
     document.querySelectorAll('[data-medgen-refresh-statuses]').forEach((button) => {
       if (!(button instanceof HTMLButtonElement) || button.dataset.medgenRefreshStatusesBound === 'true') {
@@ -2494,6 +2671,21 @@
       });
     });
 
+    document.querySelectorAll('[data-medgen-select-all-preview]').forEach((button) => {
+      if (!(button instanceof HTMLButtonElement) || button.dataset.medgenSelectAllPreviewBound === 'true') {
+        return;
+      }
+
+      button.dataset.medgenSelectAllPreviewBound = 'true';
+      button.addEventListener('click', () => {
+        document.querySelectorAll('[data-medgen-preview-select]').forEach((input) => {
+          if (input instanceof HTMLInputElement && !input.disabled) {
+            input.checked = true;
+          }
+        });
+      });
+    });
+
     document.querySelectorAll('[data-medgen-preview-ready-all]').forEach((button) => {
       if (!(button instanceof HTMLButtonElement) || button.dataset.medgenPreviewReadyAllBound === 'true') {
         return;
@@ -2504,41 +2696,30 @@
         const siteId = activeSiteKey();
         const index = siteId ? adminState.medgenTaskIndexBySite[siteId] : null;
         const tasks = index && Array.isArray(index.tasks) ? index.tasks : [];
-        const ready = tasks.filter(medgenTaskIsReady).map(medgenTaskId).filter(Boolean).slice(0, 25);
+        const selected = selectedMedGenPreviewTaskIds();
+        const ready = (selected.length > 0 ? selected : tasks.filter(medgenTaskIsReady).map(medgenTaskId)).filter(Boolean).slice(0, 25);
 
         if (!siteId || ready.length === 0) {
-          setMedGenOutput({ ok: false, issues: ['ready_medgen_tasks_not_found'] });
+          setMedGenOutput({ ok: false, issues: ['selected_ready_medgen_tasks_not_found'] });
           return;
         }
 
         button.disabled = true;
-        button.textContent = 'Собираю preview...';
+        button.textContent = 'Деплою PREVIEW...';
+        setMedGenStatus('Деплою выбранные MedGen PREVIEW на домен выбранного сайта.');
 
         try {
-          const results = [];
-
-          for (const taskId of ready) {
-            results.push(await cloudflareCreateMedGenPreview(siteId, taskId));
-          }
-
-          const ok = results.every((result) => result && result.ok);
-          setMedGenOutput({
-            ok,
-            action: 'medgen_preview_ready_all',
-            site_id: siteId,
-            total: results.length,
-            created: results.filter((result) => result && result.ok).length,
-            results
-          });
-          setMedGenStatus(ok
-            ? 'Ready MedGen-страницы собраны в runtime preview. Проверьте список страниц выбранного сайта.'
-            : 'Часть MedGen preview не собрана. Проверьте JSON ответа.');
+          const result = await deployMedGenPreviewTasks(siteId, ready, 'medgen_preview_batch_deploy');
+          setMedGenOutput(result);
+          setMedGenStatus(result && result.ok
+            ? 'Выбранные MedGen PREVIEW приняты и отправлены в Cloudflare Pages deploy. GitHub Actions не запускались.'
+            : 'Деплой выбранных MedGen PREVIEW не завершен. Проверьте JSON ответа.');
           await refreshRuntimeContentIndexForActiveSite({ silent: true, force: true });
           await refreshReleaseStatusForActiveSite({ silent: true });
           await refreshMedGenTaskIndexForActiveSite({ force: true });
         } finally {
           button.disabled = false;
-          button.textContent = 'Собрать ready preview';
+          button.textContent = 'Деплой всех PREVIEW';
         }
       });
     });
@@ -2552,6 +2733,7 @@
       button.addEventListener('click', async () => {
         const siteId = activeSiteKey();
         const taskId = String(button.getAttribute('data-medgen-task-preview') || '').trim();
+        let previewWindow = null;
 
         if (!siteId || !taskId) {
           setMedGenOutput({ ok: false, issues: ['site_id_or_task_id_missing'] });
@@ -2559,7 +2741,13 @@
         }
 
         button.disabled = true;
-        button.textContent = 'Preview...';
+        button.textContent = 'Открываю...';
+
+        try {
+          previewWindow = window.open('', '_blank', 'noopener');
+        } catch (error) {
+          previewWindow = null;
+        }
 
         try {
           const result = await cloudflareCreateMedGenPreview(siteId, taskId);
@@ -2570,25 +2758,23 @@
             : 'MedGen preview не создан. Проверьте JSON ответа.');
 
           if (result && result.ok) {
-            const previewUrl = String(
-              result.preview && result.preview.preview_url
-                ? result.preview.preview_url
-                : result.content_package && result.content_package.preview_url
-                  ? result.content_package.preview_url
-                  : ''
-            ).trim();
+            const previewUrl = medgenPreviewResultUrl(result);
 
             await refreshRuntimeContentIndexForActiveSite({ silent: true, force: true });
             await refreshReleaseStatusForActiveSite({ silent: true });
             await refreshMedGenTaskIndexForActiveSite({ force: true });
 
             if (previewUrl) {
-              window.location.assign(previewUrl);
+              openPreviewUrl(previewUrl, previewWindow);
+            } else if (previewWindow && !previewWindow.closed) {
+              previewWindow.close();
             }
+          } else if (previewWindow && !previewWindow.closed) {
+            previewWindow.close();
           }
         } finally {
           button.disabled = false;
-          button.textContent = 'Preview';
+          button.textContent = 'Посмотреть preview';
         }
       });
     });
@@ -2610,26 +2796,14 @@
 
         button.disabled = true;
         button.textContent = 'Deploy...';
-        setMedGenStatus('Готовлю deploy MedGen preview для выбранного сайта без GitHub Actions.');
+        setMedGenStatus('Деплою выбранный MedGen PREVIEW на домен выбранного сайта без GitHub Actions.');
 
         try {
-          const runtimeRelease = await prepareRuntimeReleaseForActiveSite();
-          const pagesDeploy = runtimeRelease && runtimeRelease.ok
-            ? await requestCloudflarePagesDeployForActiveSite({
-                source: 'medgen_task_monitor',
-                request_id: 'pages-deploy-medgen-' + Date.now()
-              })
-            : null;
+          const result = await deployMedGenPreviewTasks(siteId, [taskId], 'medgen_task_monitor_deploy');
 
-          setMedGenOutput({
-            ok: Boolean(runtimeRelease && runtimeRelease.ok && pagesDeploy && pagesDeploy.ok),
-            action: 'medgen_preview_deploy',
-            task_id: taskId,
-            runtime_release: runtimeRelease,
-            pages_deploy: pagesDeploy
-          });
-          setMedGenStatus(pagesDeploy && pagesDeploy.ok
-            ? 'Deploy для выбранного сайта запрошен через Cloudflare runtime. GitHub Actions не запускались.'
+          setMedGenOutput(result);
+          setMedGenStatus(result && result.ok
+            ? 'MedGen PREVIEW принят и отправлен в Cloudflare Pages deploy. GitHub Actions не запускались.'
             : 'Deploy не завершен. Проверьте release status и JSON ответа.');
           await refreshReleaseStatusForActiveSite({ silent: true });
           await refreshMedGenTaskIndexForActiveSite({ force: true });

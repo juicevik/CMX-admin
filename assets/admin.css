@@ -3460,7 +3460,7 @@ body[data-site-context="missing"] .site-workflow__active select {
 
 .medgen-task-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  grid-template-columns: auto minmax(0, 1fr) minmax(9rem, auto) auto auto auto;
   gap: var(--admin-space-3);
   align-items: center;
   min-width: 0;
@@ -3478,7 +3478,17 @@ body[data-site-context="missing"] .site-workflow__active select {
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--admin-warning) 16%, transparent);
 }
 
-.medgen-task-row[data-medgen-task-state="ready"] .medgen-task-row__lamp {
+.medgen-task-row[data-medgen-task-state="queued"] .medgen-task-row__lamp {
+  background: #c89124;
+  box-shadow: 0 0 0 4px color-mix(in srgb, #c89124 16%, transparent);
+}
+
+.medgen-task-row[data-medgen-task-state="running"] .medgen-task-row__lamp {
+  background: #2476d1;
+  box-shadow: 0 0 0 4px color-mix(in srgb, #2476d1 16%, transparent);
+}
+
+.medgen-task-row[data-medgen-task-state="succeeded"] .medgen-task-row__lamp {
   background: var(--admin-success);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--admin-success) 15%, transparent);
 }
@@ -3486,6 +3496,11 @@ body[data-site-context="missing"] .site-workflow__active select {
 .medgen-task-row[data-medgen-task-state="failed"] .medgen-task-row__lamp {
   background: #d3423f;
   box-shadow: 0 0 0 4px color-mix(in srgb, #d3423f 14%, transparent);
+}
+
+.medgen-task-row[data-medgen-task-state="unknown"] .medgen-task-row__lamp {
+  background: var(--admin-muted);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--admin-muted) 12%, transparent);
 }
 
 .medgen-task-row h4 {
@@ -3513,6 +3528,20 @@ body[data-site-context="missing"] .site-workflow__active select {
   white-space: nowrap;
 }
 
+.medgen-task-row__status {
+  display: grid;
+  gap: 0.12rem;
+}
+
+.medgen-task-row__status span {
+  display: block;
+}
+
+.medgen-task-row__status b {
+  color: var(--admin-text);
+  font-weight: 900;
+}
+
 .medgen-task-row button,
 .medgen-task-row a {
   display: inline-flex;
@@ -3537,6 +3566,28 @@ body[data-site-context="missing"] .site-workflow__active select {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 0.4rem;
+}
+
+.medgen-task-row__select {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  color: var(--admin-muted);
+  font-size: 0.7rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.medgen-task-row__select input {
+  width: 0.95rem;
+  height: 0.95rem;
+  margin: 0;
+  accent-color: var(--admin-accent);
+}
+
+.medgen-task-row__select input:disabled + span {
+  opacity: 0.46;
 }
 
 .domain-design__grid {
@@ -4232,9 +4283,14 @@ body[data-site-context="missing"] .site-workflow__active select {
   .medgen-task-row small,
   .medgen-task-row button,
   .medgen-task-row a,
-  .medgen-task-row__actions {
+  .medgen-task-row__actions,
+  .medgen-task-row__select {
     grid-column: 2;
     white-space: normal;
+  }
+
+  .medgen-task-row__select {
+    justify-content: flex-start;
   }
 
   .account-toggle {
