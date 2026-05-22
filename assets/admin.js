@@ -1601,7 +1601,7 @@
   function profileDeployLabel(profile) {
     const deploy = deployProfile(profile);
     const provider = hostingProvider(profile);
-    const environment = String(deploy.environment || 'production');
+    const environment = String(deploy.environment || cloudflareSiteIdFromProfile(profile) || 'production');
     const cloudflare = deploy && deploy.cloudflare && typeof deploy.cloudflare === 'object'
       ? deploy.cloudflare
       : {};
@@ -1686,16 +1686,14 @@
     const secretRefs = deploy.secret_refs && typeof deploy.secret_refs === 'object' ? deploy.secret_refs : {};
     const deployTarget = profile && profile.deploy_target && typeof profile.deploy_target === 'object' ? profile.deploy_target : {};
     const publicRoot = String(mirror.public_root || deploy.public_root || deployTarget.root_path || '').trim();
-    const enabled = mirror.enabled === true
-      || Boolean(publicRoot)
-      || Boolean(secretRefs.ssh_host || secretRefs.ssh_private_key || secretRefs.deploy_root)
-      || Boolean(deployTarget.host || deployTarget.user || deployTarget.identity_file);
+    const hasSecretRefs = Boolean(secretRefs.ssh_host && secretRefs.ssh_user && secretRefs.ssh_private_key && secretRefs.deploy_root);
+    const enabled = mirror.enabled === true && hasSecretRefs;
 
     return {
       enabled,
       mode: String(mirror.mode || 'static_copy_only'),
       public_root: publicRoot,
-      environment: String(deploy.environment || 'production').trim() || 'production',
+      environment: String(deploy.environment || cloudflareSiteIdFromProfile(profile) || 'production').trim() || 'production',
       secret_refs: secretRefs,
       note: String(mirror.note || 'Cloudflare Pages остается основным хостингом; VPS получает только статический дубликат.')
     };
@@ -1703,6 +1701,19 @@
 
   function sshMirrorAvailable(profile) {
     return Boolean(profile && hostingProvider(profile) === 'cloudflare_pages' && sshMirrorConfig(profile).enabled);
+  }
+
+  function defaultDeploySecretRefs() {
+    return {
+      ssh_host: 'DEPLOY_HOST',
+      ssh_port: 'DEPLOY_PORT',
+      ssh_user: 'DEPLOY_USER',
+      ssh_private_key: 'DEPLOY_SSH_KEY',
+      deploy_root: 'DEPLOY_PATH',
+      tls_email: 'DEPLOY_TLS_EMAIL',
+      cloudflare_account_id: 'CLOUDFLARE_ACCOUNT_ID',
+      cloudflare_api_token: 'CLOUDFLARE_API_TOKEN'
+    };
   }
 
   function sshMirrorToggleHtml(attributeName) {
@@ -1879,6 +1890,139 @@
     collect('medgen', profile && profile.medgen_profile);
 
     return refs;
+  }
+
+  function githubEnvironmentForProfile(profile) {
+    const deploy = deployProfile(profile);
+
+    return String(deploy.environment || cloudflareSiteIdFromProfile(profile) || '').trim();
+  }
+
+  async function githubListEnvironmentSecretNames(environmentName) {
+    const repository = githubRepository();
+    const environment = String(environmentName || '').trim();
+
+    if (!repository) {
+      return { ok: false, issues: ['github_repository_missing'] };
+    }
+
+    if (!githubToken()) {
+      return { ok: false, issues: ['github_token_required'] };
+    }
+
+    if (!environment) {
+      return { ok: false, issues: ['github_environment_required'] };
+    }
+
+    try {
+      const { response, payload } = await fetchGithubJson('/repos/' + repository + '/environments/' + encodeURIComponent(environment) + '/secrets?per_page=100');
+
+      if (!response.ok) {
+        return {
+          ok: false,
+          http_status: response.status,
+          issues: [payload && payload.message ? payload.message : 'GitHub Environment secrets недоступны.'],
+          data: payload
+        };
+      }
+
+      return {
+        ok: true,
+        environment,
+        names: Array.isArray(payload && payload.secrets)
+          ? payload.secrets.map((item) => String(item && item.name ? item.name : '').trim()).filter(Boolean)
+          : [],
+        data: payload
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        issues: ['github_environment_secret_check_failed: ' + (error && error.message ? error.message : 'network error')]
+      };
+    }
+  }
+
+  function uniqueNonEmpty(values) {
+    return Array.from(new Set((values || []).map((value) => String(value || '').trim()).filter(Boolean)));
+  }
+
+  function expectedEnvironmentSecretRefs(profile) {
+    const deploy = deployProfile(profile);
+    const refs = Object.assign(defaultDeploySecretRefs(), deploy.secret_refs && typeof deploy.secret_refs === 'object' ? deploy.secret_refs : {});
+    const provider = hostingProvider(profile);
+    const mirror = deploy.vps_mirror && typeof deploy.vps_mirror === 'object' ? deploy.vps_mirror : {};
+    const mirrorRoot = String(mirror.public_root || deploy.public_root || '').trim();
+    const wantsSsh = provider === 'static_vps' || (mirror.enabled === true && mirrorRoot !== '');
+    const cfRefs = provider === 'cloudflare_pages'
+      ? uniqueNonEmpty([refs.cloudflare_account_id, refs.cloudflare_api_token])
+      : [];
+    const sshRefs = wantsSsh
+      ? uniqueNonEmpty([refs.ssh_host, refs.ssh_port, refs.ssh_user, refs.ssh_private_key, refs.deploy_root])
+      : [];
+
+    return {
+      cloudflare: cfRefs,
+      ssh: sshRefs,
+      wants_ssh: wantsSsh
+    };
+  }
+
+  function environmentReadinessSummary(profile, availableNames) {
+    const expected = expectedEnvironmentSecretRefs(profile);
+    const available = new Set((availableNames || []).map((name) => String(name || '').trim()).filter(Boolean));
+    const missingCf = expected.cloudflare.filter((name) => !available.has(name));
+    const missingSsh = expected.ssh.filter((name) => !available.has(name));
+    const parts = [];
+
+    if (expected.cloudflare.length) {
+      parts.push(missingCf.length ? 'CF не хватает: ' + missingCf.join(', ') : 'CF готов');
+    }
+
+    if (expected.wants_ssh) {
+      parts.push(missingSsh.length ? 'SSH mirror не хватает: ' + missingSsh.join(', ') : 'SSH mirror готов');
+    } else {
+      parts.push('SSH mirror выключен');
+    }
+
+    return {
+      ok: missingCf.length === 0 && missingSsh.length === 0,
+      missing_cloudflare: missingCf,
+      missing_ssh: missingSsh,
+      message: parts.join(' · ')
+    };
+  }
+
+  function setSiteFleetSecretStatus(message) {
+    const status = document.querySelector('[data-site-fleet-secret-status]');
+
+    if (status) {
+      status.value = String(message || '');
+      status.textContent = String(message || '');
+    }
+  }
+
+  async function checkActiveSiteEnvironmentSecrets() {
+    const profile = activeSiteProfile();
+
+    if (!profile) {
+      setSiteFleetSecretStatus('Сначала выберите профиль сайта.');
+      return;
+    }
+
+    const environment = githubEnvironmentForProfile(profile);
+
+    setSiteFleetSecretStatus('Проверяю GitHub Environment ' + (environment || '-') + '...');
+
+    const result = await githubListEnvironmentSecretNames(environment);
+
+    if (!result.ok) {
+      setSiteFleetSecretStatus('Environment ' + (environment || '-') + ': ' + (result.issues || ['проверка не удалась']).join('; '));
+      return;
+    }
+
+    const readiness = environmentReadinessSummary(profile, result.names || []);
+
+    setSiteFleetSecretStatus('Environment ' + environment + ': ' + readiness.message + '. Найдено refs: ' + (result.names || []).length + '.');
   }
 
   function setActiveSite(siteId) {
@@ -2591,10 +2735,10 @@
       + '<span>в работе: ' + escapeHtml(String(counts.active)) + '</span>'
       + '<span>ошибки: ' + escapeHtml(String(counts.failed)) + '</span>'
       + '<button type="button" data-medgen-refresh-statuses>Проверить ответ MedGen</button>'
-      + (counts.ready > 0 ? '<button type="button" data-medgen-select-all-preview>Отметить все</button>' : '')
-      + (counts.ready > 0 ? sshMirrorToggleHtml('data-medgen-ssh-mirror-deploy') : '')
+      + (counts.ready > 0 ? '<span class="medgen-task-monitor__bulk"><b>Отметить все</b><button type="button" data-medgen-select-all-preview>CF</button><button type="button" data-medgen-select-all-ssh>SSH</button></span>' : '')
       + (counts.ready > 0 ? '<button type="button" data-medgen-preview-ready-all>Деплой всех PREVIEW</button>' : '')
       + '</div>';
+    const sshAvailable = sshMirrorAvailable(activeSiteProfile());
 
     const rows = list.slice(0, 24).map((taskRecord) => {
       const id = medgenTaskId(taskRecord);
@@ -2612,15 +2756,21 @@
       const pollButton = id
         ? '<button type="button" data-medgen-task-poll-row="' + escapeHtml(id) + '">Проверить</button>'
         : '';
+      const rowDeployButtons = id && isReady
+        ? '<button type="button" data-medgen-task-deploy="' + escapeHtml(id) + '">DeployCF</button>'
+          + '<button type="button" data-medgen-task-deploy-ssh="' + escapeHtml(id) + '" ' + (sshAvailable ? '' : 'disabled title="SSH mirror недоступен: нет сохраненного SSH target/secret_refs."') + '>Deploy SSH</button>'
+        : '';
       const action = previewUrl
-        ? '<span class="medgen-task-row__actions"><a href="' + escapeHtml(previewUrl) + '" target="_blank" rel="noopener" data-medgen-task-preview-link="' + escapeHtml(id) + '">Посмотреть preview</a><button type="button" data-medgen-task-deploy="' + escapeHtml(id) + '">Deploy</button></span>'
+        ? '<span class="medgen-task-row__actions"><a href="' + escapeHtml(previewUrl) + '" target="_blank" rel="noopener" data-medgen-task-preview-link="' + escapeHtml(id) + '">Посмотреть preview</a>' + rowDeployButtons + '</span>'
         : (id && isReady
-            ? '<button type="button" data-medgen-task-preview="' + escapeHtml(id) + '">Посмотреть preview</button>'
+            ? '<span class="medgen-task-row__actions"><button type="button" data-medgen-task-preview="' + escapeHtml(id) + '">Посмотреть preview</button>' + rowDeployButtons + '</span>'
             : (id ? '<span class="medgen-task-row__actions">' + requestButton + pollButton + '</span>' : ''));
-      const selector = '<label class="medgen-task-row__select" title="Отметьте страницу, чтобы включить ее в «Деплой всех PREVIEW».">'
-        + '<input type="checkbox" data-medgen-preview-select="' + escapeHtml(id) + '" ' + (isReady ? 'checked' : 'disabled') + '>'
-        + '<span>deploy</span>'
-        + '</label>';
+      const selector = '<div class="medgen-task-row__select" title="Отметьте CF для деплоя на Cloudflare Pages, SSH для дополнительного статического дубликата на VPS.">'
+        + '<span class="medgen-task-row__select-head">CF</span>'
+        + '<span class="medgen-task-row__select-head">SSH</span>'
+        + '<label><input type="checkbox" data-medgen-preview-select="' + escapeHtml(id) + '" ' + (isReady ? 'checked' : 'disabled') + '><span class="sr-only">Cloudflare deploy</span></label>'
+        + '<label><input type="checkbox" data-medgen-ssh-select="' + escapeHtml(id) + '" ' + (isReady && sshAvailable ? '' : 'disabled') + '><span class="sr-only">SSH mirror deploy</span></label>'
+        + '</div>';
 
       return '<article class="medgen-task-row" data-medgen-task-state="' + escapeHtml(state) + '">'
         + '<span class="medgen-task-row__lamp" aria-hidden="true"></span>'
@@ -2669,6 +2819,13 @@
     return Array.from(document.querySelectorAll('[data-medgen-preview-select]'))
       .filter((input) => input instanceof HTMLInputElement && input.checked && !input.disabled)
       .map((input) => String(input.getAttribute('data-medgen-preview-select') || '').trim())
+      .filter(Boolean);
+  }
+
+  function selectedMedGenSshTaskIds() {
+    return Array.from(document.querySelectorAll('[data-medgen-ssh-select]'))
+      .filter((input) => input instanceof HTMLInputElement && input.checked && !input.disabled)
+      .map((input) => String(input.getAttribute('data-medgen-ssh-select') || '').trim())
       .filter(Boolean);
   }
 
@@ -2824,6 +2981,21 @@
       });
     });
 
+    document.querySelectorAll('[data-medgen-select-all-ssh]').forEach((button) => {
+      if (!(button instanceof HTMLButtonElement) || button.dataset.medgenSelectAllSshBound === 'true') {
+        return;
+      }
+
+      button.dataset.medgenSelectAllSshBound = 'true';
+      button.addEventListener('click', () => {
+        document.querySelectorAll('[data-medgen-ssh-select]').forEach((input) => {
+          if (input instanceof HTMLInputElement && !input.disabled) {
+            input.checked = true;
+          }
+        });
+      });
+    });
+
     document.querySelectorAll('[data-medgen-preview-ready-all]').forEach((button) => {
       if (!(button instanceof HTMLButtonElement) || button.dataset.medgenPreviewReadyAllBound === 'true') {
         return;
@@ -2835,7 +3007,9 @@
         const index = siteId ? adminState.medgenTaskIndexBySite[siteId] : null;
         const tasks = index && Array.isArray(index.tasks) ? index.tasks : [];
         const selected = selectedMedGenPreviewTaskIds();
-        const ready = (selected.length > 0 ? selected : tasks.filter(medgenTaskIsReady).map(medgenTaskId)).filter(Boolean).slice(0, 25);
+        const selectedSsh = selectedMedGenSshTaskIds();
+        const selectedUnion = Array.from(new Set(selected.concat(selectedSsh)));
+        const ready = (selectedUnion.length > 0 ? selectedUnion : tasks.filter(medgenTaskIsReady).map(medgenTaskId)).filter(Boolean).slice(0, 25);
 
         if (!siteId || ready.length === 0) {
           setMedGenOutput({ ok: false, issues: ['selected_ready_medgen_tasks_not_found'] });
@@ -2844,7 +3018,7 @@
 
         button.disabled = true;
         button.textContent = 'Деплою PREVIEW...';
-        const sshRequested = sshMirrorRequested('[data-medgen-ssh-mirror-deploy]');
+        const sshRequested = selectedSsh.length > 0;
         setMedGenStatus(sshRequested
           ? 'Деплою выбранные MedGen PREVIEW на Cloudflare Pages и затем запрошу SSH mirror.'
           : 'Деплою выбранные MedGen PREVIEW на домен выбранного сайта.');
@@ -2939,27 +3113,60 @@
         }
 
         button.disabled = true;
-        button.textContent = 'Deploy...';
-        const sshRequested = sshMirrorRequested('[data-medgen-ssh-mirror-deploy]');
-        setMedGenStatus(sshRequested
-          ? 'Деплою выбранный MedGen PREVIEW на Cloudflare Pages и затем запрошу SSH mirror.'
-          : 'Деплою выбранный MedGen PREVIEW на домен выбранного сайта без GitHub Actions.');
+        button.textContent = 'DeployCF...';
+        setMedGenStatus('Деплою выбранный MedGen PREVIEW на Cloudflare Pages без SSH mirror.');
 
         try {
           const result = await deployMedGenPreviewTasks(siteId, [taskId], 'medgen_task_monitor_deploy', {
-            ssh_mirror_requested: sshRequested
+            ssh_mirror_requested: false
           });
 
           setMedGenOutput(result);
           setMedGenStatus(result && result.ok
-            ? 'MedGen PREVIEW принят и отправлен в Cloudflare Pages deploy.'
-              + (sshRequested ? ' SSH mirror workflow запрошен отдельно.' : ' GitHub Actions не запускались.')
+            ? 'MedGen PREVIEW принят и отправлен в Cloudflare Pages deploy. GitHub Actions не запускались.'
             : 'Deploy не завершен. Проверьте release status и JSON ответа.');
           await refreshReleaseStatusForActiveSite({ silent: true });
           await refreshMedGenTaskIndexForActiveSite({ force: true });
         } finally {
           button.disabled = false;
-          button.textContent = 'Deploy';
+          button.textContent = 'DeployCF';
+        }
+      });
+    });
+
+    document.querySelectorAll('[data-medgen-task-deploy-ssh]').forEach((button) => {
+      if (!(button instanceof HTMLButtonElement) || button.dataset.medgenTaskDeploySshBound === 'true') {
+        return;
+      }
+
+      button.dataset.medgenTaskDeploySshBound = 'true';
+      button.addEventListener('click', async () => {
+        const siteId = activeSiteKey();
+        const taskId = String(button.getAttribute('data-medgen-task-deploy-ssh') || '').trim();
+
+        if (!siteId || !taskId) {
+          setMedGenOutput({ ok: false, issues: ['site_id_or_task_id_missing'] });
+          return;
+        }
+
+        button.disabled = true;
+        button.textContent = 'SSH...';
+        setMedGenStatus('Деплою выбранный MedGen PREVIEW на Cloudflare Pages и затем запрошу SSH mirror.');
+
+        try {
+          const result = await deployMedGenPreviewTasks(siteId, [taskId], 'medgen_task_monitor_deploy_ssh', {
+            ssh_mirror_requested: true
+          });
+
+          setMedGenOutput(result);
+          setMedGenStatus(result && result.ok
+            ? 'MedGen PREVIEW принят, Cloudflare Pages deploy запрошен, SSH mirror workflow запрошен отдельно.'
+            : 'Deploy SSH не завершен. Проверьте release status и JSON ответа.');
+          await refreshReleaseStatusForActiveSite({ silent: true });
+          await refreshMedGenTaskIndexForActiveSite({ force: true });
+        } finally {
+          button.disabled = false;
+          button.textContent = 'Deploy SSH';
         }
       });
     });
@@ -4652,6 +4859,9 @@
       secrets.textContent = JSON.stringify(allSecretRefs(profile), null, 2);
     }
 
+    setSiteFleetSecretStatus(profile
+      ? 'Готово к проверке GitHub Environment ' + githubEnvironmentForProfile(profile) + '.'
+      : 'Выберите профиль сайта, чтобы проверить Environment secrets.');
     populateSiteFleetForm(profile);
     wireSiteFleetPanel();
   }
@@ -4687,13 +4897,16 @@
     }
 
     if (!profile) {
-      document.querySelectorAll('[data-site-fleet-field], [data-site-fleet-market-field], [data-site-fleet-route-prefix], [data-site-fleet-deploy-field], [data-site-fleet-cloudflare-field]').forEach((field) => {
+      document.querySelectorAll('[data-site-fleet-field], [data-site-fleet-market-field], [data-site-fleet-route-prefix], [data-site-fleet-deploy-field], [data-site-fleet-cloudflare-field], [data-site-fleet-secret-ref]').forEach((field) => {
         if (field instanceof HTMLInputElement || field instanceof HTMLSelectElement) {
           field.value = '';
         }
       });
       setSiteFleetField('[data-site-fleet-medgen-field="enabled"]', 'true');
       setSiteFleetField('[data-site-fleet-deploy-field="provider"]', 'cloudflare_pages');
+      Object.entries(defaultDeploySecretRefs()).forEach(([key, value]) => {
+        setSiteFleetField('[data-site-fleet-secret-ref="' + key + '"]', value);
+      });
       syncSiteFleetHostingFields();
       return;
     }
@@ -4712,7 +4925,7 @@
     setSiteFleetField('[data-site-fleet-route-prefix="article"]', siteRouteNamespace(profile, 'article') || '/guides/');
     setSiteFleetField('[data-site-fleet-deploy-field="provider"]', profile.deploy_profile && profile.deploy_profile.provider ? profile.deploy_profile.provider : 'cloudflare_pages');
     setSiteFleetField('[data-site-fleet-deploy-field="public_root"]', profile.deploy_profile && profile.deploy_profile.public_root ? profile.deploy_profile.public_root : '');
-    setSiteFleetField('[data-site-fleet-deploy-field="environment"]', profile.deploy_profile && profile.deploy_profile.environment ? profile.deploy_profile.environment : 'production');
+    setSiteFleetField('[data-site-fleet-deploy-field="environment"]', profile.deploy_profile && profile.deploy_profile.environment ? profile.deploy_profile.environment : cloudflareSiteIdFromProfile(profile));
     const cloudflare = profile.deploy_profile && profile.deploy_profile.cloudflare && typeof profile.deploy_profile.cloudflare === 'object'
       ? profile.deploy_profile.cloudflare
       : {};
@@ -4723,6 +4936,10 @@
     setSiteFleetField('[data-site-fleet-cloudflare-field="r2_bucket"]', cloudflare.r2_bucket || 'cmx-sites');
     setSiteFleetField('[data-site-fleet-cloudflare-field="kv_namespace"]', cloudflare.kv_namespace || 'cmx_sessions');
     setSiteFleetField('[data-site-fleet-cloudflare-field="custom_domain_mode"]', cloudflare.custom_domain_mode || 'manual_dns');
+    const secretRefs = Object.assign(defaultDeploySecretRefs(), profile.deploy_profile && profile.deploy_profile.secret_refs && typeof profile.deploy_profile.secret_refs === 'object' ? profile.deploy_profile.secret_refs : {});
+    Object.entries(secretRefs).forEach(([key, value]) => {
+      setSiteFleetField('[data-site-fleet-secret-ref="' + key + '"]', value);
+    });
     setSiteFleetField('[data-site-fleet-medgen-field="enabled"]', profile.medgen_profile && profile.medgen_profile.enabled === false ? 'false' : 'true');
     syncSiteFleetHostingFields();
   }
@@ -4734,16 +4951,7 @@
       deploy_profile: {
         provider: 'cloudflare_pages',
         cloudflare: {},
-        secret_refs: {
-          ssh_host: 'CMX_PRODUCTION_SSH_HOST',
-          ssh_port: 'CMX_PRODUCTION_SSH_PORT',
-          ssh_user: 'CMX_PRODUCTION_SSH_USER',
-          ssh_private_key: 'CMX_PRODUCTION_SSH_PRIVATE_KEY',
-          deploy_root: 'CMX_PRODUCTION_DEPLOY_ROOT',
-          tls_email: 'CMX_PRODUCTION_TLS_EMAIL',
-          cloudflare_account_id: 'CLOUDFLARE_ACCOUNT_ID',
-          cloudflare_api_token: 'CLOUDFLARE_API_TOKEN'
-        }
+        secret_refs: defaultDeploySecretRefs()
       },
       medgen_profile: {
         enabled: true,
@@ -4794,12 +5002,17 @@
       }
     });
 
-    if (
-      profile.deploy_profile.provider === 'cloudflare_pages'
-      && !profile.deploy_profile.public_root
-      && profile.domain
-    ) {
-      profile.deploy_profile.public_root = '/var/www/' + String(profile.domain).trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    document.querySelectorAll('[data-site-fleet-secret-ref]').forEach((field) => {
+      const key = field.getAttribute('data-site-fleet-secret-ref') || '';
+      const value = field instanceof HTMLInputElement ? field.value.trim() : '';
+
+      if (key && value) {
+        profile.deploy_profile.secret_refs[key] = value;
+      }
+    });
+
+    if (!profile.deploy_profile.environment) {
+      profile.deploy_profile.environment = cloudflareSiteIdFromProfile(profile);
     }
 
     document.querySelectorAll('[data-site-fleet-cloudflare-field]').forEach((field) => {
@@ -4811,7 +5024,7 @@
     });
 
     profile.deploy_profile.vps_mirror = {
-      enabled: profile.deploy_profile.provider === 'cloudflare_pages',
+      enabled: profile.deploy_profile.provider === 'cloudflare_pages' && Boolean(profile.deploy_profile.public_root),
       mode: 'static_copy_only',
       public_root: profile.deploy_profile.public_root || ''
     };
@@ -4921,6 +5134,7 @@
     const saveButton = document.querySelector('[data-site-fleet-save]');
     const newButton = document.querySelector('[data-site-fleet-new]');
     const archiveButton = document.querySelector('[data-site-fleet-archive]');
+    const checkSecretsButton = document.querySelector('[data-site-fleet-check-secrets]');
 
     if (dryRunButton && dryRunButton.dataset.siteFleetBound !== 'true') {
       dryRunButton.dataset.siteFleetBound = 'true';
@@ -4945,6 +5159,11 @@
     if (archiveButton && archiveButton.dataset.siteFleetBound !== 'true') {
       archiveButton.dataset.siteFleetBound = 'true';
       archiveButton.addEventListener('click', () => runSiteFleetAction('archive_site', false));
+    }
+
+    if (checkSecretsButton && checkSecretsButton.dataset.siteFleetBound !== 'true') {
+      checkSecretsButton.dataset.siteFleetBound = 'true';
+      checkSecretsButton.addEventListener('click', () => checkActiveSiteEnvironmentSecrets());
     }
 
     const providerField = document.querySelector('[data-site-fleet-deploy-field="provider"]');
@@ -6565,6 +6784,8 @@
     const baseUrlField = byId('admin-domain-base-url');
     const emailField = byId('admin-domain-email');
     const tlsEmailField = byId('admin-deploy-tls-email');
+    const deployEnvironmentField = byId('admin-deploy-environment');
+    const deployRootField = byId('admin-deploy-root-path');
     const routeSeedField = byId('admin-domain-route-seed');
     const defaultLocaleField = byId('admin-domain-default-locale');
 
@@ -6588,6 +6809,14 @@
 
     if (domain && tlsEmailField && !tlsEmailField.value.trim()) {
       tlsEmailField.value = contactEmailFromDomain(domain);
+    }
+
+    if (domain && deployEnvironmentField && !deployEnvironmentField.value.trim()) {
+      deployEnvironmentField.value = slugFromDomainValue(domain);
+    }
+
+    if (domain && deployRootField && !deployRootField.value.trim()) {
+      deployRootField.value = '/var/www/' + domain;
     }
 
     if (domain && routeSeedField && !routeSeedField.value.trim()) {
@@ -6645,12 +6874,34 @@
   }
 
   function collectDomainDeployTargetPayload() {
+    const target = collectDomainDeployFormPayload();
+
+    if (target.provider === 'cloudflare_pages') {
+      return {
+        enabled: false,
+        deploy_after_build: false,
+        bootstrap_ubuntu: false,
+        provision_tls: false,
+        domain: '',
+        tls_email: '',
+        host: '',
+        port: 22,
+        user: '',
+        root_path: '',
+        identity_file: ''
+      };
+    }
+
+    return target;
+  }
+
+  function collectDomainDeployFormPayload() {
     const target = {};
 
     document.querySelectorAll('[data-domain-deploy-field]').forEach((field) => {
       const key = field.getAttribute('data-domain-deploy-field') || '';
 
-      if (!key) {
+      if (!key || key === 'environment') {
         return;
       }
 
@@ -6668,11 +6919,17 @@
   }
 
   function collectDomainDeployProfilePayload() {
-    const deployTarget = collectDomainDeployTargetPayload();
+    const deployTarget = collectDomainDeployFormPayload();
     const provider = deployTarget.provider === 'static_vps' ? 'static_vps' : 'cloudflare_pages';
+    const environmentField = byId('admin-deploy-environment');
+    const domainField = byId('admin-domain-name');
+    const environment = environmentField && environmentField.value.trim()
+      ? environmentField.value.trim()
+      : slugFromDomainValue(domainField && domainField.value ? domainField.value : '');
     const profile = {
       provider,
-      environment: 'production'
+      environment: environment || 'production',
+      secret_refs: defaultDeploySecretRefs()
     };
 
     if (provider === 'cloudflare_pages') {
@@ -7630,6 +7887,7 @@
       'data-site-fleet-save': 'Сохраняет профиль сайта: домен, GEO, deploy и secret_refs.',
       'data-site-fleet-new': 'Очищает форму для нового профиля сайта.',
       'data-site-fleet-archive': 'Архивирует профиль сайта. Публичные файлы не удаляются без отдельного workflow.',
+      'data-site-fleet-check-secrets': 'Проверяет в GitHub Environment выбранного сайта только наличие нужных secret refs. Значения секретов админка не получает и не показывает.',
       'data-domain-hosting-provider-select': 'Выбирает основную среду нового сайта. По умолчанию это Pages-хостинг; VPS используется только как optional static mirror после отдельного подтверждения.',
       'data-medgen-dry-run': 'Проверяет задачу MedGen без публикации и deploy.',
       'data-medgen-run': 'Для Cloudflare-сайта создает MedGen task_id через Worker без GitHub Actions и сразу сохраняет статус в админке.',
