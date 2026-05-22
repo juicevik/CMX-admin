@@ -1680,6 +1680,106 @@
       : 'VPS / SSH static';
   }
 
+  function sshMirrorConfig(profile) {
+    const deploy = deployProfile(profile);
+    const mirror = deploy.vps_mirror && typeof deploy.vps_mirror === 'object' ? deploy.vps_mirror : {};
+    const secretRefs = deploy.secret_refs && typeof deploy.secret_refs === 'object' ? deploy.secret_refs : {};
+    const deployTarget = profile && profile.deploy_target && typeof profile.deploy_target === 'object' ? profile.deploy_target : {};
+    const publicRoot = String(mirror.public_root || deploy.public_root || deployTarget.root_path || '').trim();
+    const enabled = mirror.enabled === true
+      || Boolean(publicRoot)
+      || Boolean(secretRefs.ssh_host || secretRefs.ssh_private_key || secretRefs.deploy_root)
+      || Boolean(deployTarget.host || deployTarget.user || deployTarget.identity_file);
+
+    return {
+      enabled,
+      mode: String(mirror.mode || 'static_copy_only'),
+      public_root: publicRoot,
+      environment: String(deploy.environment || 'production').trim() || 'production',
+      secret_refs: secretRefs,
+      note: String(mirror.note || 'Cloudflare Pages остается основным хостингом; VPS получает только статический дубликат.')
+    };
+  }
+
+  function sshMirrorAvailable(profile) {
+    return Boolean(profile && hostingProvider(profile) === 'cloudflare_pages' && sshMirrorConfig(profile).enabled);
+  }
+
+  function sshMirrorToggleHtml(attributeName) {
+    const available = sshMirrorAvailable(activeSiteProfile());
+    const title = available
+      ? 'Если отмечено, после Cloudflare Pages deploy будет запущен отдельный SSH mirror workflow. Домен все равно остается на Cloudflare.'
+      : 'SSH mirror недоступен: в выбранном site profile нет сохраненного SSH target/secret_refs.';
+    const attr = attributeName || 'data-ssh-mirror-deploy';
+
+    return '<label class="ssh-mirror-toggle" aria-disabled="' + (available ? 'false' : 'true') + '" title="' + escapeHtml(title) + '">'
+      + '<input type="checkbox" ' + attr + ' ' + (available ? '' : 'disabled') + '> Deploy SSH'
+      + '</label>';
+  }
+
+  function syncSshMirrorToggles() {
+    const available = sshMirrorAvailable(activeSiteProfile());
+    const title = available
+      ? 'Если отмечено, после Cloudflare Pages deploy будет запущен отдельный SSH mirror workflow. Домен все равно остается на Cloudflare.'
+      : 'SSH mirror недоступен: в выбранном site profile нет сохраненного SSH target/secret_refs.';
+
+    document.querySelectorAll('[data-ssh-mirror-deploy], [data-medgen-ssh-mirror-deploy]').forEach((control) => {
+      if (!(control instanceof HTMLInputElement)) {
+        return;
+      }
+
+      control.disabled = !available;
+      if (!available) {
+        control.checked = false;
+      }
+
+      const label = control.closest('.ssh-mirror-toggle');
+      if (label) {
+        label.setAttribute('aria-disabled', available ? 'false' : 'true');
+        label.setAttribute('title', title);
+      }
+    });
+  }
+
+  function sshMirrorRequested(selector) {
+    const control = document.querySelector(selector);
+
+    return control instanceof HTMLInputElement && !control.disabled && control.checked;
+  }
+
+  function sshMirrorPayload(requested, source) {
+    const mirror = sshMirrorConfig(activeSiteProfile());
+
+    return {
+      requested: requested === true,
+      mode: mirror.mode,
+      public_root: mirror.public_root,
+      environment: mirror.environment,
+      source: String(source || 'admin_cloudflare_pages_deploy'),
+      secret_refs: mirror.secret_refs,
+      note: mirror.note
+    };
+  }
+
+  async function requestSshMirrorDeployForActiveSite(source) {
+    const profile = activeSiteProfile();
+    const config = readGithubConfig();
+    const mirror = sshMirrorConfig(profile);
+
+    if (!sshMirrorAvailable(profile)) {
+      return { ok: false, issues: ['ssh_mirror_not_configured'] };
+    }
+
+    if (!githubToken()) {
+      return { ok: false, issues: ['github_token_required_for_ssh_mirror'] };
+    }
+
+    return githubDispatchWorkflow(config.deploy_workflow_id || 'deploy.yml', {
+      target: mirror.environment || 'production',
+      verification_mode: 'content_fast'
+    }, config.deploy_actions_url || '');
+  }
+
   function syncActiveHostingActions(profile) {
     const provider = profile ? hostingProvider(profile) : '';
 
@@ -2021,6 +2121,7 @@
       refresh: document.querySelector('[data-release-status-refresh]'),
       prepare: document.querySelector('[data-runtime-release-prepare]'),
       deploy: document.querySelector('[data-cloudflare-pages-deploy]'),
+      sshMirrorDeploy: document.querySelector('[data-ssh-mirror-deploy]'),
       runtimeIndexRefresh: document.querySelector('[data-runtime-index-refresh]'),
       runtimeIndexStatus: document.querySelector('[data-runtime-index-status]'),
       directUploadFile: document.querySelector('[data-direct-upload-file]'),
@@ -2491,6 +2592,7 @@
       + '<span>ошибки: ' + escapeHtml(String(counts.failed)) + '</span>'
       + '<button type="button" data-medgen-refresh-statuses>Проверить ответ MedGen</button>'
       + (counts.ready > 0 ? '<button type="button" data-medgen-select-all-preview>Отметить все</button>' : '')
+      + (counts.ready > 0 ? sshMirrorToggleHtml('data-medgen-ssh-mirror-deploy') : '')
       + (counts.ready > 0 ? '<button type="button" data-medgen-preview-ready-all>Деплой всех PREVIEW</button>' : '')
       + '</div>';
 
@@ -2560,6 +2662,7 @@
 
     target.innerHTML = medgenTaskMonitorHtml(index && Array.isArray(index.tasks) ? index.tasks : []);
     wireMedGenTaskMonitor();
+    syncSshMirrorToggles();
   }
 
   function selectedMedGenPreviewTaskIds() {
@@ -2623,7 +2726,8 @@
     }
   }
 
-  async function deployMedGenPreviewTasks(siteId, taskIds, source) {
+  async function deployMedGenPreviewTasks(siteId, taskIds, source, options) {
+    const opts = options || {};
     const ids = Array.from(new Set((Array.isArray(taskIds) ? taskIds : []).map((id) => String(id || '').trim()).filter(Boolean)));
     const previewResults = [];
     const publishResults = [];
@@ -2666,7 +2770,8 @@
     const pagesDeploy = runtimeRelease && runtimeRelease.ok
       ? await requestCloudflarePagesDeployForActiveSite({
           source: source || 'medgen_preview_deploy',
-          request_id: 'pages-deploy-medgen-' + Date.now()
+          request_id: 'pages-deploy-medgen-' + Date.now(),
+          ssh_mirror_requested: opts.ssh_mirror_requested === true
         })
       : null;
 
@@ -2739,13 +2844,19 @@
 
         button.disabled = true;
         button.textContent = 'Деплою PREVIEW...';
-        setMedGenStatus('Деплою выбранные MedGen PREVIEW на домен выбранного сайта.');
+        const sshRequested = sshMirrorRequested('[data-medgen-ssh-mirror-deploy]');
+        setMedGenStatus(sshRequested
+          ? 'Деплою выбранные MedGen PREVIEW на Cloudflare Pages и затем запрошу SSH mirror.'
+          : 'Деплою выбранные MedGen PREVIEW на домен выбранного сайта.');
 
         try {
-          const result = await deployMedGenPreviewTasks(siteId, ready, 'medgen_preview_batch_deploy');
+          const result = await deployMedGenPreviewTasks(siteId, ready, 'medgen_preview_batch_deploy', {
+            ssh_mirror_requested: sshRequested
+          });
           setMedGenOutput(result);
           setMedGenStatus(result && result.ok
-            ? 'Выбранные MedGen PREVIEW приняты и отправлены в Cloudflare Pages deploy. GitHub Actions не запускались.'
+            ? 'Выбранные MedGen PREVIEW приняты и отправлены в Cloudflare Pages deploy.'
+              + (sshRequested ? ' SSH mirror workflow запрошен отдельно.' : ' GitHub Actions не запускались.')
             : 'Деплой выбранных MedGen PREVIEW не завершен. Проверьте JSON ответа.');
           await refreshRuntimeContentIndexForActiveSite({ silent: true, force: true });
           await refreshReleaseStatusForActiveSite({ silent: true });
@@ -2829,14 +2940,20 @@
 
         button.disabled = true;
         button.textContent = 'Deploy...';
-        setMedGenStatus('Деплою выбранный MedGen PREVIEW на домен выбранного сайта без GitHub Actions.');
+        const sshRequested = sshMirrorRequested('[data-medgen-ssh-mirror-deploy]');
+        setMedGenStatus(sshRequested
+          ? 'Деплою выбранный MedGen PREVIEW на Cloudflare Pages и затем запрошу SSH mirror.'
+          : 'Деплою выбранный MedGen PREVIEW на домен выбранного сайта без GitHub Actions.');
 
         try {
-          const result = await deployMedGenPreviewTasks(siteId, [taskId], 'medgen_task_monitor_deploy');
+          const result = await deployMedGenPreviewTasks(siteId, [taskId], 'medgen_task_monitor_deploy', {
+            ssh_mirror_requested: sshRequested
+          });
 
           setMedGenOutput(result);
           setMedGenStatus(result && result.ok
-            ? 'MedGen PREVIEW принят и отправлен в Cloudflare Pages deploy. GitHub Actions не запускались.'
+            ? 'MedGen PREVIEW принят и отправлен в Cloudflare Pages deploy.'
+              + (sshRequested ? ' SSH mirror workflow запрошен отдельно.' : ' GitHub Actions не запускались.')
             : 'Deploy не завершен. Проверьте release status и JSON ответа.');
           await refreshReleaseStatusForActiveSite({ silent: true });
           await refreshMedGenTaskIndexForActiveSite({ force: true });
@@ -3710,21 +3827,40 @@
       return { ok: false, issues: ['site_context_or_pages_project_required'] };
     }
 
-    resetReleaseStatusView('Запрашиваю Cloudflare Pages deploy через Worker. GitHub Actions не запускаются...', 'loading');
+    const sshRequested = opts.ssh_mirror_requested === true
+      || (opts.ssh_mirror_requested !== false && sshMirrorRequested('[data-ssh-mirror-deploy]'));
+    const sshPayload = sshMirrorPayload(sshRequested, opts.source || 'admin_release_status_panel');
+
+    resetReleaseStatusView(sshRequested
+      ? 'Запрашиваю Cloudflare Pages deploy через Worker; после него будет запрошен SSH mirror workflow...'
+      : 'Запрашиваю Cloudflare Pages deploy через Worker. GitHub Actions не запускаются...', 'loading');
 
     const result = await cloudflareRequestPagesDeployment(siteId, {
       request_id: opts.request_id || 'pages-deploy-' + Date.now(),
       pages_project: cloudflare.pages_project || '',
       branch: cloudflare.branch || '',
       force: opts.force === true,
-      source: opts.source || 'admin_release_status_panel'
+      source: opts.source || 'admin_release_status_panel',
+      ssh_mirror_requested: sshRequested,
+      ssh_mirror: sshPayload
     });
+    let sshMirrorResult = null;
+
+    if (sshRequested && result && result.ok && result.status !== 'no_prepared_release') {
+      sshMirrorResult = await requestSshMirrorDeployForActiveSite(opts.source || 'admin_release_status_panel');
+      result.ssh_mirror_workflow = sshMirrorResult;
+    }
 
     if (result && result.ok) {
       const count = Number(result.package_count || 0);
       const message = result.status === 'no_prepared_release'
         ? 'Подготовленного runtime release нет. Cloudflare Pages deploy не запускался.'
-        : 'Cloudflare Pages deploy запрошен через Worker: ' + count + ' пакетов. GitHub Actions не запускались.';
+        : 'Cloudflare Pages deploy запрошен через Worker: ' + count + ' пакетов.'
+          + (sshRequested
+            ? (sshMirrorResult && sshMirrorResult.ok
+              ? ' SSH mirror workflow запрошен отдельно.'
+              : ' SSH mirror не запущен: ' + ((sshMirrorResult && Array.isArray(sshMirrorResult.issues) && sshMirrorResult.issues.join('; ')) || 'проверьте deploy workflow/secrets.'))
+            : ' GitHub Actions не запускались.');
       resetReleaseStatusView(message, result.status === 'no_prepared_release' ? 'clean' : 'prepared');
     } else {
       const issues = result && Array.isArray(result.issues) ? result.issues.join('; ') : 'pages deployment endpoint недоступен';
@@ -4212,7 +4348,12 @@
       return { ok: false, issues: ['runtime_content_index_not_ready'] };
     }
 
-    setDirectUploadStatus('Отправляю bundle в Cloudflare Worker без GitHub Actions...', 'loading', false);
+    const sshRequested = sshMirrorRequested('[data-ssh-mirror-deploy]');
+    const sshPayload = sshMirrorPayload(sshRequested, 'admin_prebuilt_bundle');
+
+    setDirectUploadStatus(sshRequested
+      ? 'Отправляю bundle в Cloudflare Worker; после публикации будет запрошен SSH mirror workflow...'
+      : 'Отправляю bundle в Cloudflare Worker без GitHub Actions...', 'loading', false);
     resetReleaseStatusView('Отправляю prebuilt bundle в Cloudflare Pages Direct Upload...', 'loading');
 
     const payload = Object.assign({}, bundle, {
@@ -4220,6 +4361,8 @@
       pages_project: cloudflare.pages_project || bundle.pages_project || '',
       branch: cloudflare.branch || bundle.branch || '',
       source: 'admin_prebuilt_bundle',
+      ssh_mirror_requested: sshRequested,
+      ssh_mirror: sshPayload,
       approval: Object.assign({}, bundle.approval || {}, {
         accepted: true,
         payload_hash: approval.payload_hash,
@@ -4228,12 +4371,24 @@
       })
     });
     const result = await cloudflareRequestPagesDeployment(siteId, payload);
+    let sshMirrorResult = null;
+
+    if (sshRequested && result && result.ok) {
+      sshMirrorResult = await requestSshMirrorDeployForActiveSite('admin_prebuilt_bundle');
+      result.ssh_mirror_workflow = sshMirrorResult;
+    }
 
     if (result && result.ok) {
       const deploymentUrl = result.deployment_url ? ' URL: ' + result.deployment_url : '';
       const message = result.idempotent
         ? 'Deploy bundle уже был создан ранее. Повторный upload не запускался.' + deploymentUrl
-        : 'Bundle опубликован: ' + summary.files + ' файлов. GitHub Actions не запускались.' + deploymentUrl;
+        : 'Bundle опубликован: ' + summary.files + ' файлов.'
+          + (sshRequested
+            ? (sshMirrorResult && sshMirrorResult.ok
+              ? ' SSH mirror workflow запрошен отдельно.'
+              : ' SSH mirror не запущен: ' + ((sshMirrorResult && Array.isArray(sshMirrorResult.issues) && sshMirrorResult.issues.join('; ')) || 'проверьте deploy workflow/secrets.'))
+            : ' GitHub Actions не запускались.')
+          + deploymentUrl;
       setDirectUploadStatus(message, 'done', true);
       resetReleaseStatusView(result.idempotent
         ? 'Cloudflare Pages Direct Upload уже существует для этого request_id.'
@@ -4426,6 +4581,7 @@
 
     syncSiteScopedDefaults(profile);
     syncActiveHostingActions(profile);
+    syncSshMirrorToggles();
     syncSiteContextGate(profile, profiles);
     updateSiteStageWidget(null);
     updateMedGenStageWidget();

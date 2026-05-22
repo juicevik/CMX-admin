@@ -2980,6 +2980,7 @@ body[data-site-context="missing"] .site-workflow__active select {
 
 .site-workflow__release-head {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--admin-space-3);
   align-items: center;
   justify-content: space-between;
@@ -3448,6 +3449,39 @@ body[data-site-context="missing"] .site-workflow__active select {
   font: inherit;
   font-size: 0.72rem;
   font-weight: 900;
+}
+
+.ssh-mirror-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  min-height: 1.75rem;
+  padding: 0 0.68rem;
+  border: 1px solid color-mix(in srgb, var(--admin-accent) 36%, var(--admin-border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--admin-accent) 8%, var(--admin-surface));
+  color: var(--admin-accent-strong);
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.ssh-mirror-toggle input {
+  width: 0.95rem;
+  height: 0.95rem;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--admin-accent);
+}
+
+.ssh-mirror-toggle[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.ssh-mirror-toggle[aria-disabled="true"] input {
+  cursor: not-allowed;
 }
 
 .medgen-task-monitor__list {
