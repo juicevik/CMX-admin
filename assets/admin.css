@@ -3327,6 +3327,39 @@ body[data-site-context="missing"] .site-workflow__active select {
   line-height: 1.35;
 }
 
+.site-fleet-secret-setup {
+  margin-top: var(--admin-space-3);
+  padding: var(--admin-space-3);
+  border: 1px solid color-mix(in srgb, var(--admin-accent) 22%, var(--admin-border));
+  border-radius: var(--admin-radius-card);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--admin-accent) 7%, transparent), transparent 56%),
+    var(--admin-surface-soft);
+}
+
+.site-fleet-secret-setup summary {
+  cursor: pointer;
+  color: var(--admin-text);
+  font-weight: 950;
+}
+
+.site-fleet-secret-values textarea {
+  width: 100%;
+  min-height: 8rem;
+  resize: vertical;
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-control);
+  background: var(--admin-surface);
+  color: var(--admin-text);
+  font: inherit;
+  letter-spacing: 0;
+  padding: var(--admin-space-3);
+}
+
+.site-fleet-secret-values__wide {
+  grid-column: 1 / -1;
+}
+
 @media (max-width: 680px) {
   .site-fleet-secret-check {
     grid-template-columns: 1fr;

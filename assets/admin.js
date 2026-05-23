@@ -1351,7 +1351,7 @@
     }
 
     if (role === 'editor') {
-      return { read: true, write: true, publish: true, config: true, media: true, archive: true, site_rebrand: true, deploy: true, roles: false };
+      return { read: true, write: true, publish: true, config: true, media: true, archive: true, site_rebrand: true, deploy: true, roles: true };
     }
 
     return { read: true, write: false, publish: false, config: false, media: false, archive: false, site_rebrand: false, deploy: false, roles: false };
@@ -1378,7 +1378,7 @@
     }
 
     if (role === 'editor') {
-      capabilities.roles = false;
+      capabilities.roles = true;
     }
 
     return {
@@ -1898,6 +1898,148 @@
     return String(deploy.environment || cloudflareSiteIdFromProfile(profile) || '').trim();
   }
 
+  async function githubJsonRequest(path, method, body) {
+    const options = {
+      method: method || 'GET',
+      headers: githubHeaders()
+    };
+
+    if (body !== undefined) {
+      options.headers = Object.assign({}, options.headers, {
+        'Content-Type': 'application/json'
+      });
+      options.body = JSON.stringify(body);
+    }
+
+    const response = await fetch(githubApiUrl(path), options);
+    const payload = await readResponseJson(response);
+
+    return { response, payload };
+  }
+
+  async function githubEnsureEnvironment(environmentName) {
+    const repository = githubRepository();
+    const environment = String(environmentName || '').trim();
+
+    if (!repository) {
+      return { ok: false, issues: ['github_repository_missing'] };
+    }
+
+    if (!githubToken()) {
+      return { ok: false, issues: ['github_token_required'] };
+    }
+
+    if (!environment) {
+      return { ok: false, issues: ['github_environment_required'] };
+    }
+
+    const { response, payload } = await githubJsonRequest(
+      '/repos/' + repository + '/environments/' + encodeURIComponent(environment),
+      'PUT',
+      {}
+    );
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        http_status: response.status,
+        issues: [payload && payload.message ? payload.message : 'GitHub Environment не создан.'],
+        data: payload
+      };
+    }
+
+    return { ok: true, environment, data: payload };
+  }
+
+  async function githubEnvironmentPublicKey(environmentName) {
+    const repository = githubRepository();
+    const environment = String(environmentName || '').trim();
+
+    if (!repository || !environment) {
+      return { ok: false, issues: ['github_environment_public_key_context_missing'] };
+    }
+
+    const { response, payload } = await githubJsonRequest(
+      '/repos/' + repository + '/environments/' + encodeURIComponent(environment) + '/secrets/public-key',
+      'GET'
+    );
+
+    if (!response.ok || !payload || !payload.key || !payload.key_id) {
+      return {
+        ok: false,
+        http_status: response.status,
+        issues: [payload && payload.message ? payload.message : 'GitHub Environment public key недоступен.'],
+        data: payload
+      };
+    }
+
+    return {
+      ok: true,
+      key: String(payload.key),
+      key_id: String(payload.key_id)
+    };
+  }
+
+  async function loadSodium() {
+    const sodium = window.sodium;
+
+    if (!sodium || !sodium.ready) {
+      throw new Error('libsodium_not_loaded');
+    }
+
+    await sodium.ready;
+
+    if (typeof sodium.crypto_box_seal !== 'function') {
+      throw new Error('libsodium_crypto_box_seal_unavailable');
+    }
+
+    return sodium;
+  }
+
+  async function encryptGithubEnvironmentSecret(rawValue, publicKeyBase64) {
+    const sodium = await loadSodium();
+    const variant = sodium.base64_variants.ORIGINAL;
+    const publicKey = sodium.from_base64(String(publicKeyBase64 || ''), variant);
+    const message = sodium.from_string(String(rawValue || ''));
+    const sealed = sodium.crypto_box_seal(message, publicKey);
+
+    return sodium.to_base64(sealed, variant);
+  }
+
+  async function githubPutEnvironmentSecret(environmentName, secretName, encryptedValue, keyId) {
+    const repository = githubRepository();
+    const environment = String(environmentName || '').trim();
+    const name = String(secretName || '').trim();
+
+    if (!repository || !environment || !name) {
+      return { ok: false, issues: ['github_environment_secret_context_missing'] };
+    }
+
+    if (!/^[A-Z0-9_]+$/.test(name)) {
+      return { ok: false, issues: ['unsafe_secret_name: ' + name] };
+    }
+
+    const { response, payload } = await githubJsonRequest(
+      '/repos/' + repository + '/environments/' + encodeURIComponent(environment) + '/secrets/' + encodeURIComponent(name),
+      'PUT',
+      {
+        encrypted_value: encryptedValue,
+        key_id: keyId
+      }
+    );
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        http_status: response.status,
+        issues: [payload && payload.message ? payload.message : 'GitHub Environment secret не сохранен: ' + name],
+        data: payload
+      };
+    }
+
+    return { ok: true, name };
+  }
+
   async function githubListEnvironmentSecretNames(environmentName) {
     const repository = githubRepository();
     const environment = String(environmentName || '').trim();
@@ -1999,6 +2141,193 @@
       status.value = String(message || '');
       status.textContent = String(message || '');
     }
+  }
+
+  function setSiteFleetSecretSaveStatus(message) {
+    const status = document.querySelector('[data-site-fleet-secret-save-status]');
+
+    if (status) {
+      status.value = String(message || '');
+      status.textContent = String(message || '');
+    }
+  }
+
+  function secretRefsForProfile(profile) {
+    const deploy = deployProfile(profile);
+
+    return Object.assign(
+      defaultDeploySecretRefs(),
+      deploy.secret_refs && typeof deploy.secret_refs === 'object' ? deploy.secret_refs : {}
+    );
+  }
+
+  function collectSiteFleetEnvironmentSecretValues(profile) {
+    const refs = secretRefsForProfile(profile);
+    const collected = {};
+
+    document.querySelectorAll('[data-site-fleet-secret-value], [data-site-fleet-secret-name]').forEach((field) => {
+      if (!(field instanceof HTMLInputElement) && !(field instanceof HTMLTextAreaElement)) {
+        return;
+      }
+
+      const raw = field.value;
+      const trimmed = String(raw || '').trim();
+
+      if (!trimmed) {
+        return;
+      }
+
+      const refKey = field.getAttribute('data-site-fleet-secret-value') || '';
+      const explicitName = field.getAttribute('data-site-fleet-secret-name') || '';
+      const secretName = explicitName || refs[refKey] || '';
+
+      if (secretName) {
+        collected[String(secretName).trim()] = refKey === 'ssh_private_key' ? raw : trimmed;
+      }
+    });
+
+    const hasSshValue = ['DEPLOY_HOST', 'DEPLOY_USER', 'DEPLOY_PATH', 'DEPLOY_SSH_KEY'].some((name) => {
+      return Object.prototype.hasOwnProperty.call(collected, name);
+    });
+
+    if (hasSshValue && !Object.prototype.hasOwnProperty.call(collected, refs.ssh_port || 'DEPLOY_PORT')) {
+      collected[refs.ssh_port || 'DEPLOY_PORT'] = '22';
+    }
+
+    return collected;
+  }
+
+  function clearSiteFleetEnvironmentSecretValues(secretNames, secretRefs) {
+    const names = new Set((secretNames || []).map((name) => String(name || '').trim()).filter(Boolean));
+    const refs = secretRefs && typeof secretRefs === 'object'
+      ? secretRefs
+      : secretRefsForProfile(collectSiteFleetPayload('upsert_site').profile);
+
+    document.querySelectorAll('[data-site-fleet-secret-value], [data-site-fleet-secret-name]').forEach((field) => {
+      if (!(field instanceof HTMLInputElement) && !(field instanceof HTMLTextAreaElement)) {
+        return;
+      }
+
+      const explicitName = field.getAttribute('data-site-fleet-secret-name') || '';
+      const refKey = field.getAttribute('data-site-fleet-secret-value') || '';
+      const secretName = explicitName || refs[refKey] || '';
+
+      if (!names.size || names.has(secretName)) {
+        field.value = '';
+      }
+    });
+  }
+
+  async function saveEnvironmentSecretsForProfile(profile, options) {
+    const currentOptions = options && typeof options === 'object' ? options : {};
+    const environment = githubEnvironmentForProfile(profile);
+    const refs = secretRefsForProfile(profile);
+    const values = collectSiteFleetEnvironmentSecretValues(profile);
+    const names = Object.keys(values).filter(Boolean);
+
+    if (!names.length) {
+      return { ok: true, skipped: true, written_names: [] };
+    }
+
+    if (!githubToken()) {
+      return { ok: false, issues: ['github_token_required'] };
+    }
+
+    if (!environment) {
+      return { ok: false, issues: ['github_environment_required'] };
+    }
+
+    if (!currentOptions.skipConfirm && !window.confirm('Создать GitHub Environment "' + environment + '" и записать ' + names.length + ' encrypted secrets? Значения будут очищены из формы после записи.')) {
+      return { ok: false, cancelled: true, issues: ['operation_cancelled'] };
+    }
+
+    setSiteFleetSecretSaveStatus('Создаю GitHub Environment ' + environment + '...');
+
+    const ensureResult = await githubEnsureEnvironment(environment);
+
+    if (!ensureResult.ok) {
+      return ensureResult;
+    }
+
+    setSiteFleetSecretSaveStatus('Получаю public key GitHub Environment...');
+
+    const publicKey = await githubEnvironmentPublicKey(environment);
+
+    if (!publicKey.ok) {
+      return publicKey;
+    }
+
+    const written = [];
+    const issues = [];
+
+    for (const name of names) {
+      setSiteFleetSecretSaveStatus('Шифрую и сохраняю secret ' + name + '...');
+
+      try {
+        const encrypted = await encryptGithubEnvironmentSecret(values[name], publicKey.key);
+        const result = await githubPutEnvironmentSecret(environment, name, encrypted, publicKey.key_id);
+
+        if (result.ok) {
+          written.push(name);
+        } else {
+          issues.push(...(result.issues || ['secret_save_failed: ' + name]));
+        }
+      } catch (error) {
+        issues.push('secret_save_failed: ' + name + ': ' + (error && error.message ? error.message : 'encryption error'));
+      }
+    }
+
+    if (written.length) {
+      clearSiteFleetEnvironmentSecretValues(written, refs);
+    }
+
+    return {
+      ok: issues.length === 0,
+      action: 'github_environment_secrets_save',
+      environment,
+      written_names: written,
+      issues
+    };
+  }
+
+  async function saveActiveSiteEnvironmentSecrets() {
+    const collected = collectSiteFleetPayload('upsert_site');
+    const profile = collected.profile && typeof collected.profile === 'object'
+      ? Object.assign({}, collected.profile, { site_id: cloudflareSiteIdFromProfile(collected.profile) || collected.site_id || activeSiteKey() })
+      : activeSiteProfile();
+
+    if (!profile) {
+      setSiteFleetSecretSaveStatus('Сначала выберите или заполните профиль сайта.');
+      return;
+    }
+
+    setStatusBusy('admin-site-fleet-secret-save-status', true);
+
+    try {
+      const result = await saveEnvironmentSecretsForProfile(profile, { skipConfirm: false });
+
+      if (result.cancelled) {
+        setSiteFleetSecretSaveStatus('Операция отменена.');
+        return;
+      }
+
+      if (!result.ok) {
+        setSiteFleetSecretSaveStatus('Environment secrets не сохранены: ' + (result.issues || ['unknown error']).join('; '));
+        return;
+      }
+
+      setSiteFleetSecretSaveStatus(result.skipped
+        ? 'Нет заполненных значений для записи.'
+        : 'Environment ' + result.environment + ': сохранено refs ' + result.written_names.join(', ') + '. Значения очищены из формы.');
+      await checkActiveSiteEnvironmentSecrets();
+    } finally {
+      setStatusBusy('admin-site-fleet-secret-save-status', false);
+    }
+  }
+
+  function clearActiveSiteEnvironmentSecretValues() {
+    clearSiteFleetEnvironmentSecretValues([]);
+    setSiteFleetSecretSaveStatus('Введенные значения очищены из формы. GitHub Environment secrets не изменялись.');
   }
 
   async function checkActiveSiteEnvironmentSecrets() {
@@ -5055,12 +5384,18 @@
     const profile = collected.profile && typeof collected.profile === 'object' ? collected.profile : {};
     const provider = profile.deploy_profile && profile.deploy_profile.provider === 'static_vps' ? 'static_vps' : 'cloudflare_pages';
     const siteId = cloudflareSiteIdFromProfile(profile);
+    const pendingEnvironmentSecretNames = Object.keys(collectSiteFleetEnvironmentSecretValues(profile));
 
-    if (!dryRun && !window.confirm(operation === 'archive_site'
+    const environmentSecretConfirmSuffix = pendingEnvironmentSecretNames.length
+      ? ' Заполненные Environment secrets будут зашифрованы и записаны.'
+      : '';
+    const confirmationMessage = operation === 'archive_site'
       ? 'Архивировать профиль сайта?'
       : (provider === 'cloudflare_pages'
-          ? 'Сохранить профиль сайта в Cloudflare runtime и GitHub Contents без запуска Actions?'
-          : 'Сохранить legacy VPS профиль через GitHub Actions?'))) {
+          ? 'Сохранить профиль сайта в Cloudflare runtime и GitHub Contents без запуска Actions?' + environmentSecretConfirmSuffix
+          : 'Сохранить legacy VPS профиль через GitHub Actions?' + environmentSecretConfirmSuffix);
+
+    if (!dryRun && !window.confirm(confirmationMessage)) {
       setSiteFleetFormStatus('Операция отменена');
       return;
     }
@@ -5100,24 +5435,87 @@
           return;
         }
 
+        const environmentResult = pendingEnvironmentSecretNames.length
+          ? await saveEnvironmentSecretsForProfile(Object.assign({}, profile, { site_id: siteId }), { skipConfirm: true })
+          : { ok: true, skipped: true, written_names: [] };
+
+        if (!environmentResult.ok) {
+          setSiteFleetOutput({
+            ok: false,
+            action: 'site_fleet_environment_secret_save',
+            site_id: siteId,
+            environment_secrets: {
+              ok: false,
+              environment: environmentResult.environment || githubEnvironmentForProfile(profile),
+              written_names: environmentResult.written_names || [],
+              issues: environmentResult.issues || []
+            }
+          });
+          setSiteFleetFormStatus('Профиль не сохранен: Environment secrets не записаны.');
+          setSiteFleetSecretSaveStatus('Environment secrets не записаны: ' + (environmentResult.issues || ['unknown error']).join('; ') + '. Поля с ошибкой оставлены для повторной попытки или ручной очистки.');
+          return;
+        }
+
+        if (pendingEnvironmentSecretNames.length) {
+          setSiteFleetSecretSaveStatus('Environment secrets записаны: ' + (environmentResult.written_names || []).join(', '));
+        }
+
         const runtimeResult = await cloudflareUpsertSiteProfile(Object.assign({}, profile, { site_id: siteId }));
         const path = 'config/sites/' + siteId + '.json';
         const current = await githubReadTextFile(path);
         const githubResult = await githubSaveJsonFile(path, Object.assign({}, profile, { site_id: siteId }), 'Sync site profile: ' + siteId, current.ok ? current.sha : '');
         const result = {
-          ok: runtimeResult.ok && githubResult.ok,
+          ok: runtimeResult.ok && githubResult.ok && environmentResult.ok,
           action: 'site_fleet_low_cost_save',
           site_id: siteId,
           runtime: runtimeResult,
           github: githubResult,
+          environment_secrets: {
+            ok: environmentResult.ok,
+            environment: environmentResult.environment || githubEnvironmentForProfile(profile),
+            written_names: environmentResult.written_names || [],
+            issues: environmentResult.issues || []
+          },
           written_paths: githubResult.written_paths || [],
           warnings: ['Cloudflare Pages профиль сохранен без GitHub Actions; commit содержит [skip ci].']
         };
 
         mergeRuntimeSiteProfiles([{ site_id: siteId, profile: Object.assign({}, profile, { site_id: siteId }) }]);
         setSiteFleetOutput(result);
-        setSiteFleetFormStatus(result.ok ? 'Профиль сохранен в Cloudflare runtime и GitHub. Actions не запускались.' : 'Профиль сохранен не полностью; проверьте JSON ответа.');
+        setSiteFleetFormStatus(result.ok
+          ? 'Профиль сохранен в Cloudflare runtime и GitHub. Environment secrets: ' + (environmentResult.skipped ? 'не менялись.' : 'записаны.')
+          : 'Профиль сохранен не полностью; проверьте JSON ответа.');
+        if (pendingEnvironmentSecretNames.length) {
+          setSiteFleetSecretSaveStatus(environmentResult.ok
+            ? 'Environment secrets записаны: ' + (environmentResult.written_names || []).join(', ')
+            : 'Environment secrets не записаны: ' + (environmentResult.issues || ['unknown error']).join('; '));
+          await checkActiveSiteEnvironmentSecrets();
+        }
         return;
+      }
+
+      if (!dryRun && pendingEnvironmentSecretNames.length) {
+        const environmentResult = await saveEnvironmentSecretsForProfile(profile, { skipConfirm: true });
+
+        if (!environmentResult.ok) {
+          setSiteFleetOutput({
+            ok: false,
+            action: 'site_fleet_environment_secret_save',
+            site_id: siteId,
+            environment_secrets: {
+              ok: false,
+              environment: environmentResult.environment || githubEnvironmentForProfile(profile),
+              written_names: environmentResult.written_names || [],
+              issues: environmentResult.issues || []
+            }
+          });
+          setSiteFleetFormStatus('Workflow не запущен: Environment secrets не записаны.');
+          setSiteFleetSecretSaveStatus('Environment secrets не записаны: ' + (environmentResult.issues || ['unknown error']).join('; '));
+          return;
+        }
+
+        setSiteFleetSecretSaveStatus('Environment secrets записаны: ' + (environmentResult.written_names || []).join(', '));
+        await checkActiveSiteEnvironmentSecrets();
       }
 
       const result = await githubDispatchCommand('site_fleet', collected, dryRun);
@@ -5135,6 +5533,8 @@
     const newButton = document.querySelector('[data-site-fleet-new]');
     const archiveButton = document.querySelector('[data-site-fleet-archive]');
     const checkSecretsButton = document.querySelector('[data-site-fleet-check-secrets]');
+    const saveEnvironmentSecretsButton = document.querySelector('[data-site-fleet-save-environment-secrets]');
+    const clearEnvironmentSecretValuesButton = document.querySelector('[data-site-fleet-clear-environment-secret-values]');
 
     if (dryRunButton && dryRunButton.dataset.siteFleetBound !== 'true') {
       dryRunButton.dataset.siteFleetBound = 'true';
@@ -5164,6 +5564,16 @@
     if (checkSecretsButton && checkSecretsButton.dataset.siteFleetBound !== 'true') {
       checkSecretsButton.dataset.siteFleetBound = 'true';
       checkSecretsButton.addEventListener('click', () => checkActiveSiteEnvironmentSecrets());
+    }
+
+    if (saveEnvironmentSecretsButton && saveEnvironmentSecretsButton.dataset.siteFleetBound !== 'true') {
+      saveEnvironmentSecretsButton.dataset.siteFleetBound = 'true';
+      saveEnvironmentSecretsButton.addEventListener('click', () => saveActiveSiteEnvironmentSecrets());
+    }
+
+    if (clearEnvironmentSecretValuesButton && clearEnvironmentSecretValuesButton.dataset.siteFleetBound !== 'true') {
+      clearEnvironmentSecretValuesButton.dataset.siteFleetBound = 'true';
+      clearEnvironmentSecretValuesButton.addEventListener('click', () => clearActiveSiteEnvironmentSecretValues());
     }
 
     const providerField = document.querySelector('[data-site-fleet-deploy-field="provider"]');
@@ -7802,7 +8212,7 @@
       'main-workspace': 'Рабочая область выбранного сайта. Внутри находятся редактура страниц и карточки товаров для активного домена.',
       editorial: 'Редактирует существующие страницы или создает новые страницы сайта. Матрица показывает только поля, которые относятся к выбранному типу или странице.',
       'product-cards': 'Создает и редактирует карточки товаров. Без выбранного домена поля заблокированы, чтобы случайно не изменить другой сайт.',
-      'role-permissions': 'Админский раздел для пользователей, ролей и API-ключей ИИ-агента. Редактору этот раздел не показывается.',
+      'role-permissions': 'Раздел пользователей, ролей и API-ключей ИИ-агента. Human-профили admin и editor имеют одинаковые права; agent keys можно ограничивать отдельно.',
       'site-launch': 'Отдельный поток для нового домена: профиль сайта, GEO, дизайн, сервер, SSL и первый статический deploy.',
       medgen: 'Раздел для задач внешнего генератора контента. MedGen не пишет сайт напрямую: сначала создается задача, затем preview и только потом сохранение.',
       sites: 'Список профилей сайтов. Здесь хранится домен, GEO, locale, deploy profile и имена secret_refs без вывода реальных секретов.',
@@ -7888,6 +8298,8 @@
       'data-site-fleet-new': 'Очищает форму для нового профиля сайта.',
       'data-site-fleet-archive': 'Архивирует профиль сайта. Публичные файлы не удаляются без отдельного workflow.',
       'data-site-fleet-check-secrets': 'Проверяет в GitHub Environment выбранного сайта только наличие нужных secret refs. Значения секретов админка не получает и не показывает.',
+      'data-site-fleet-save-environment-secrets': 'Создает GitHub Environment выбранного сайта и сохраняет заполненные SSH/Cloudflare значения как encrypted secrets. Сырые значения после записи очищаются из формы.',
+      'data-site-fleet-clear-environment-secret-values': 'Очищает введенные SSH/Cloudflare значения из формы без изменения GitHub Environment.',
       'data-domain-hosting-provider-select': 'Выбирает основную среду нового сайта. По умолчанию это Pages-хостинг; VPS используется только как optional static mirror после отдельного подтверждения.',
       'data-medgen-dry-run': 'Проверяет задачу MedGen без публикации и deploy.',
       'data-medgen-run': 'Для Cloudflare-сайта создает MedGen task_id через Worker без GitHub Actions и сразу сохраняет статус в админке.',
@@ -11586,7 +11998,7 @@
     const current = actor || authState.actor || {};
     const capabilities = current.capabilities || {};
 
-    return current.role === 'admin' && capabilities.roles === true;
+    return capabilities.roles === true;
   }
 
   function applyRolePermissionsVisibility(actor) {
@@ -11626,7 +12038,7 @@
       const users = githubRoleUsers();
       const editor = users.find((user) => user && user.role === 'editor');
 
-      return editor && editor.capabilities ? Object.assign({}, roleDefaultCapabilities('editor'), editor.capabilities, { read: true, roles: false }) : roleDefaultCapabilities('editor');
+      return editor && editor.capabilities ? Object.assign({}, roleDefaultCapabilities('editor'), editor.capabilities, { read: true, roles: true }) : roleDefaultCapabilities('editor');
     }
 
     return runtime && runtime.capabilities && runtime.capabilities.editor
@@ -12364,7 +12776,7 @@
     const capabilities = collectEditorPermissionFields();
 
     if (isGithubMode()) {
-      setRolePermissionsStatus('Отправляю права editor в Actions...');
+      setRolePermissionsStatus('Отправляю права профиля editor в Actions...');
       setStatusBusy('admin-role-permissions-status', true);
 
       try {
@@ -12374,8 +12786,8 @@
         }, false);
 
         if (result.ok === false) {
-          const issues = result.issues || (result.errors || []).map((error) => error.human || error.code || 'Права editor не сохранены');
-          setRolePermissionsStatus((issues.length > 0 ? issues : ['Права editor не сохранены']).join('; '));
+          const issues = result.issues || (result.errors || []).map((error) => error.human || error.code || 'Права профиля editor не сохранены');
+          setRolePermissionsStatus((issues.length > 0 ? issues : ['Права профиля editor не сохранены']).join('; '));
           setStatusBusy('admin-role-permissions-status', false);
           return;
         }
@@ -12384,11 +12796,11 @@
         const users = roles && roles.users ? roles.users : {};
         Object.keys(users).forEach((login) => {
           if (users[login] && users[login].role === 'editor') {
-            users[login].capabilities = Object.assign({}, capabilities, { read: true, roles: false });
+            users[login].capabilities = Object.assign({}, capabilities, { read: true, roles: true });
           }
         });
         renderAdminUsersList({ users: githubRoleUsers() }, {});
-        setRolePermissionsStatus('Права editor отправлены в Actions. Editor по-прежнему не получает доступ к блоку ролей.');
+        setRolePermissionsStatus('Права профиля editor отправлены в Actions. Human-профили admin и editor имеют одинаковую матрицу прав.');
         setStatusBusy('admin-role-permissions-status', false);
         return;
       } catch (error) {
@@ -12399,11 +12811,11 @@
     }
 
     if (!path) {
-      setRolePermissionsStatus('Endpoint прав editor недоступен');
+      setRolePermissionsStatus('Endpoint прав профиля editor недоступен');
       return;
     }
 
-    setRolePermissionsStatus('Сохраняю права editor...');
+    setRolePermissionsStatus('Сохраняю права профиля editor...');
     setStatusBusy('admin-role-permissions-status', true);
 
     try {
@@ -12424,16 +12836,16 @@
       const payload = await readResponseJson(response);
 
       if (response.ok && payload.ok !== false) {
-        setRolePermissionsStatus('Права editor сохранены');
+        setRolePermissionsStatus('Права профиля editor сохранены');
         setStatusBusy('admin-role-permissions-status', false);
         loadAdminBootstrap(authContract);
         return;
       }
 
-      setRolePermissionsStatus((payload.issues || [payload.issue || 'Права editor не сохранены']).join('; '));
+      setRolePermissionsStatus((payload.issues || [payload.issue || 'Права профиля editor не сохранены']).join('; '));
       setStatusBusy('admin-role-permissions-status', false);
     } catch (error) {
-      setRolePermissionsStatus('Endpoint прав editor недоступен');
+      setRolePermissionsStatus('Endpoint прав профиля editor недоступен');
       setStatusBusy('admin-role-permissions-status', false);
     }
   }
@@ -13632,6 +14044,23 @@
     } else {
       clearAdminBootstrap('Подключите GitHub token, чтобы открыть CMS.');
     }
+  }
+
+  if (window.__CMX_ADMIN_TEST_HOOKS__ === true && window.location && window.location.protocol === 'file:') {
+    Object.defineProperty(window, '__cmxAdminTestHooks', {
+      configurable: true,
+      enumerable: false,
+      value: {
+        collectSiteFleetEnvironmentSecretValues,
+        clearSiteFleetEnvironmentSecretValues,
+        encryptGithubEnvironmentSecret,
+        githubPutEnvironmentSecret,
+        saveEnvironmentSecretsForProfile,
+        roleDefaultCapabilities,
+        githubProfileForLogin,
+        canManageRolePermissions
+      }
+    });
   }
 
   document.addEventListener('DOMContentLoaded', () => {
