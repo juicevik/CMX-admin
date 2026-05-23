@@ -2894,11 +2894,16 @@
     const stage = medgenTaskStage(taskRecord) || 'unknown';
     const progress = medgenTaskProgress(taskRecord);
     const failedStage = medgenTaskFailedStage(taskRecord);
+    const previewStatus = medgenTaskPreviewStatus(taskRecord);
     const lines = [
       '<span>Status: <b>' + escapeHtml(status) + '</b></span>',
       '<span>Stage: <b>' + escapeHtml(stage) + '</b></span>',
       '<span>Progress: <b>' + escapeHtml(String(progress)) + '%</b></span>'
     ];
+
+    if (previewStatus) {
+      lines.push('<span>Preview: <b>' + escapeHtml(previewStatus) + '</b></span>');
+    }
 
     if (failedStage) {
       lines.push('<span>Failed: <b>' + escapeHtml(failedStage) + '</b></span>');
@@ -3089,11 +3094,9 @@
         ? '<button type="button" data-medgen-task-deploy="' + escapeHtml(id) + '">DeployCF</button>'
           + '<button type="button" data-medgen-task-deploy-ssh="' + escapeHtml(id) + '" ' + (sshAvailable ? '' : 'disabled title="SSH mirror недоступен: нет сохраненного SSH target/secret_refs."') + '>Deploy SSH</button>'
         : '';
-      const action = previewUrl
-        ? '<span class="medgen-task-row__actions"><a href="' + escapeHtml(previewUrl) + '" target="_blank" rel="noopener" data-medgen-task-preview-link="' + escapeHtml(id) + '">Посмотреть preview</a>' + rowDeployButtons + '</span>'
-        : (id && isReady
-            ? '<span class="medgen-task-row__actions"><button type="button" data-medgen-task-preview="' + escapeHtml(id) + '">Посмотреть preview</button>' + rowDeployButtons + '</span>'
-            : (id ? '<span class="medgen-task-row__actions">' + requestButton + pollButton + '</span>' : ''));
+      const action = id && isReady
+        ? '<span class="medgen-task-row__actions"><button type="button" data-medgen-task-preview="' + escapeHtml(id) + '" data-medgen-existing-preview-url="' + escapeHtml(previewUrl) + '">Посмотреть preview</button>' + rowDeployButtons + '</span>'
+        : (id ? '<span class="medgen-task-row__actions">' + requestButton + pollButton + '</span>' : '');
       const selector = '<div class="medgen-task-row__select" title="Отметьте CF для деплоя на Cloudflare Pages, SSH для дополнительного статического дубликата на VPS.">'
         + '<span class="medgen-task-row__select-head">CF</span>'
         + '<span class="medgen-task-row__select-head">SSH</span>'
@@ -3576,10 +3579,23 @@
 
         try {
           const result = await cloudflarePollMedGenTask(siteId, taskId);
+          let previewResult = null;
 
-          setMedGenOutput(result);
+          if (result && result.ok && medgenTaskIsReady(medgenTaskRecordFromRuntime(result.task))) {
+            previewResult = await cloudflareCreateMedGenPreview(siteId, taskId);
+          }
+
+          setMedGenOutput(previewResult ? {
+            ok: Boolean(result && result.ok && previewResult.ok),
+            action: 'medgen_poll_and_preview',
+            poll: result,
+            preview: previewResult,
+            warnings: ['Проверка и сбор preview прошли через Cloudflare Worker; GitHub Actions не запускались.']
+          } : result);
           setMedGenStatus(result && result.ok
-            ? 'Task_id проверен через Worker. Статус строки обновлен.'
+            ? (previewResult && previewResult.ok
+              ? 'Task_id готов: preview собран на Cloudflare Pages. Нажмите «Посмотреть preview», чтобы открыть ссылку.'
+              : 'Task_id проверен через Worker. Статус строки обновлен.')
             : 'Task_id не проверен. Смотрите JSON ответа.');
           await refreshMedGenTaskIndexForActiveSite({ force: true, manual: true });
         } finally {
@@ -7059,8 +7075,13 @@
           ? await cloudflarePollMedGenTask(siteId, taskId)
           : await cloudflareCreateMedGenTask(siteId, payload);
         let githubResult = null;
+        let previewResult = null;
 
         if (runtimeResult && runtimeResult.ok && runtimeResult.task) {
+          if (isPoll && medgenTaskIsReady(medgenTaskRecordFromRuntime(runtimeResult.task))) {
+            previewResult = await cloudflareCreateMedGenPreview(siteId, runtimeResult.task.task_id || taskId);
+          }
+
           githubResult = await githubBackupMedGenTask(siteId, runtimeResult.task, payload);
 
           if (!isPoll && taskIdField instanceof HTMLInputElement && runtimeResult.task.task_id) {
@@ -7079,6 +7100,7 @@
           action: isPoll ? 'medgen_runtime_poll' : 'medgen_runtime_create',
           site_id: siteId,
           runtime: runtimeResult,
+          preview: previewResult,
           github: githubResult,
           warnings: ['GitHub Actions не запускались. Task state сохранен в runtime и продублирован в GitHub Contents с [skip ci].']
         };
@@ -7086,7 +7108,9 @@
 
         setMedGenOutput(combined);
         setMedGenStatus(combined.ok
-          ? (isPoll ? 'MedGen task_id проверен через Worker.' : 'MedGen task_id создан через Worker и сохранен в статусах.')
+          ? (isPoll
+            ? (previewResult && previewResult.ok ? 'MedGen task_id проверен, preview собран на Cloudflare Pages.' : 'MedGen task_id проверен через Worker.')
+            : 'MedGen task_id создан через Worker и сохранен в статусах.')
           : 'MedGen runtime операция не выполнена.');
         updateMedGenStageWidget(combined.ok
           ? {
