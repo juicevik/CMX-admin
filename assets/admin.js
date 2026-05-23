@@ -12,6 +12,7 @@
     agentKeys: [],
     activeSiteId: '',
     releaseStatusRequestSeq: 0,
+    releaseStatusBySite: {},
     runtimeContentIndexRequestSeq: 0,
     runtimeContentIndexesBySite: {},
     runtimeContentIndexLoadingBySite: {},
@@ -82,6 +83,143 @@
   };
   const adminThemeStorageKey = 'cms.admin.theme';
   const activeSiteStoragePrefix = 'cms.active.site.';
+  const admin2TargetState = {
+    intent: 'create_site',
+    target: 'site',
+    intentTouched: false
+  };
+  let admin2ManualStepKey = '';
+  let admin2ReturnRaf = 0;
+  const admin2IntentDefinitions = {
+    select_site: {
+      label: 'Выбрать домен',
+      target: 'site_existing',
+      section: 'site-workflow',
+      anchor: '#admin-active-site',
+      focus: 'admin-active-site',
+      requiresSite: false,
+      detail: 'active site / домен'
+    },
+    create_site: {
+      label: 'Создать сайт',
+      target: 'site',
+      section: 'site-launch',
+      anchor: '#admin-site-launch',
+      requiresSite: false,
+      detail: 'домен, GEO, дизайн, skeleton'
+    },
+    edit_page: {
+      label: 'Редактировать существующий',
+      target: 'page',
+      section: 'editorial',
+      anchor: '#admin-editorial',
+      requiresSite: true,
+      detail: 'страницы, SEO, media'
+    },
+    medgen: {
+      label: 'Запустить MedGen',
+      target: 'medgen_task',
+      section: 'medgen',
+      anchor: '#admin-medgen',
+      focus: 'admin-medgen-task-id',
+      requiresSite: true,
+      detail: 'task, status, preview'
+    },
+    product_card: {
+      label: 'Работать с карточкой',
+      target: 'product_card_target',
+      section: 'product-cards',
+      anchor: '#admin-product-cards',
+      requiresSite: true,
+      detail: 'product matrix и media'
+    },
+    design: {
+      label: 'Править дизайн',
+      target: 'design_target',
+      section: 'design',
+      anchor: '#admin-design',
+      requiresSite: true,
+      detail: 'theme, logo, favicon'
+    },
+    deploy: {
+      label: 'Проверить deploy',
+      target: 'package',
+      section: 'site-workflow',
+      anchor: '#admin-site-workflow',
+      requiresSite: true,
+      detail: 'preview, approval, release'
+    },
+    delete_site: {
+      label: 'Удалить сайт и домен',
+      target: 'site_delete',
+      section: 'site-workflow',
+      anchor: '#admin-site-domain-delete',
+      focus: 'admin-site-domain-delete',
+      requiresSite: true,
+      detail: 'выбор домена, confirm, archive profile'
+    }
+  };
+  const admin2TargetDefinitions = {
+    site: {
+      label: 'Новый сайт',
+      intent: 'create_site',
+      section: 'site-launch',
+      anchor: '#admin-site-launch',
+      requiresSite: false
+    },
+    site_existing: {
+      label: 'Домен',
+      intent: 'select_site',
+      section: 'site-workflow',
+      anchor: '#admin-active-site',
+      focus: 'admin-active-site',
+      requiresSite: false
+    },
+    site_delete: {
+      label: 'Сайт и домен',
+      intent: 'delete_site',
+      section: 'site-workflow',
+      anchor: '#admin-site-domain-delete',
+      focus: 'admin-site-domain-delete',
+      requiresSite: true
+    },
+    page: {
+      label: 'Страница',
+      intent: 'edit_page',
+      section: 'editorial',
+      anchor: '#admin-editorial',
+      requiresSite: true
+    },
+    package: {
+      label: 'Пакет',
+      intent: 'deploy',
+      section: 'site-workflow',
+      anchor: '#admin-site-workflow',
+      requiresSite: true
+    },
+    product_card_target: {
+      label: 'Product card',
+      intent: 'product_card',
+      section: 'product-cards',
+      anchor: '#admin-product-cards',
+      requiresSite: true
+    },
+    design_target: {
+      label: 'Design',
+      intent: 'design',
+      section: 'design',
+      anchor: '#admin-design',
+      requiresSite: true
+    },
+    medgen_task: {
+      label: 'MedGen task',
+      intent: 'medgen',
+      section: 'medgen',
+      anchor: '#admin-medgen',
+      focus: 'admin-medgen-task-id',
+      requiresSite: true
+    }
+  };
 
   function readJsonScript(id, errorLabel) {
     const node = document.getElementById(id);
@@ -811,6 +949,24 @@
 
   async function cloudflareRuntimeContentIndex(siteId) {
     return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/content-index');
+  }
+
+  async function cloudflareExportSiteSnapshot(siteId) {
+    return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/export');
+  }
+
+  async function cloudflareDeletePagesProject(siteId) {
+    return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/cloudflare-pages/project', {
+      method: 'DELETE'
+    });
+  }
+
+  async function cloudflareDeleteSiteRuntime(siteId, domain) {
+    const query = domain ? '?domain=' + encodeURIComponent(domain) : '';
+
+    return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + query, {
+      method: 'DELETE'
+    });
   }
 
   async function cloudflareSeedContentBaseline(siteId, payload) {
@@ -2654,6 +2810,1315 @@
             : (/deploy/i.test(String(actionLabel)) ? 'deploy' : 'refresh'))
         : '';
     }
+
+    updateAdmin2PipelineState();
+  }
+
+  function admin2PipelineStateLabel(state) {
+    const labels = {
+      blocked: 'ждет',
+      idle: 'idle',
+      pending: 'next',
+      running: 'идет',
+      ready: 'готов',
+      deployed: 'done',
+      error: 'ошибка'
+    };
+
+    return labels[state] || labels.idle;
+  }
+
+  function normalizeAdmin2PipelineState(state) {
+    return ['blocked', 'idle', 'pending', 'running', 'ready', 'deployed', 'error'].includes(state)
+      ? state
+      : 'idle';
+  }
+
+  function admin2PipelineStepElement(key) {
+    return document.querySelector('.admin2-pipeline__step--' + key);
+  }
+
+  function setAdmin2PipelineStep(key, state, detail, current) {
+    const step = admin2PipelineStepElement(key);
+
+    if (!step) {
+      return;
+    }
+
+    const normalized = normalizeAdmin2PipelineState(state);
+    const status = step.querySelector('em');
+    const statusText = status ? status.querySelector('span') : null;
+    const detailNode = step.querySelector('strong + span');
+    const titleNode = step.querySelector('strong');
+
+    ['is-blocked', 'is-idle', 'is-pending', 'is-running', 'is-ready', 'is-deployed', 'is-error', 'is-current'].forEach((className) => {
+      step.classList.remove(className);
+    });
+    step.classList.add('is-' + normalized);
+    step.classList.toggle('is-current', current === true);
+
+    if (statusText) {
+      statusText.textContent = admin2PipelineStateLabel(normalized);
+    } else if (status) {
+      status.textContent = admin2PipelineStateLabel(normalized);
+    }
+
+    if (detailNode) {
+      detailNode.textContent = detail || '';
+    }
+
+    if (current) {
+      step.setAttribute('aria-current', 'step');
+    } else {
+      step.removeAttribute('aria-current');
+    }
+
+    step.setAttribute('aria-label', (titleNode ? titleNode.textContent : key) + ': ' + (detail || admin2PipelineStateLabel(normalized)));
+  }
+
+  function admin2ContentActionForIntent(intent) {
+    if (intent === 'delete_site') {
+      return { label: 'Удалить сайт и домен', href: '#admin-site-domain-delete' };
+    }
+
+    if (intent === 'edit_page') {
+      return { label: 'Открыть редактуру', href: '#admin-editorial' };
+    }
+
+    if (intent === 'product_card') {
+      return { label: 'Открыть карточки', href: '#admin-product-cards' };
+    }
+
+    if (intent === 'design') {
+      return { label: 'Открыть дизайн', href: '#admin-design' };
+    }
+
+    return { label: 'Открыть MedGen', href: '#admin-medgen' };
+  }
+
+  function admin2PipelineAction(current, context) {
+    const step = current || {};
+    const intent = selectedAdmin2IntentDefinition();
+    const profile = context.profile;
+
+    if (step.key === 'intent') {
+      return { label: 'Выбрать сценарий', href: '#admin2-target-heading' };
+    }
+
+    if (step.key === 'site') {
+      if (!profile && admin2TargetState.intent === 'create_site') {
+        return { label: 'Создать новый сайт', href: '#admin-site-launch' };
+      }
+
+      return { label: 'Выбрать домен', href: '#admin-active-site' };
+    }
+
+    if (step.key === 'skeleton') {
+      return { label: 'Открыть блок skeleton', href: '#admin-site-launch' };
+    }
+
+    if (step.key === 'content') {
+      return admin2ContentActionForIntent(admin2TargetState.intent);
+    }
+
+    if (step.key === 'preview') {
+      return { label: 'Собрать preview', href: '#admin-medgen' };
+    }
+
+    if (step.key === 'approval') {
+      return { label: 'Открыть approval', href: '#admin-site-workflow' };
+    }
+
+    if (step.key === 'deploy') {
+      return { label: 'Открыть deploy', href: '#admin-site-workflow' };
+    }
+
+    return { label: 'Выбрать сценарий', href: '#admin2-target-heading' };
+  }
+
+  function admin2PipelineBackAction(current, context) {
+    const step = current || {};
+    const profile = context.profile;
+    const label = 'Назад к предыдущему сценарию';
+
+    if (!step.key || step.key === 'intent') {
+      return null;
+    }
+
+    if (step.key === 'site') {
+      return { label, href: '#admin2-target-heading', resetIntent: true, targetStepKey: 'intent' };
+    }
+
+    if (step.key === 'skeleton') {
+      return { label, href: profile ? '#admin-active-site' : '#admin-site-launch', targetStepKey: 'site' };
+    }
+
+    if (step.key === 'content') {
+      return { label, href: '#admin-site-launch', targetStepKey: 'skeleton' };
+    }
+
+    if (step.key === 'preview') {
+      const action = admin2ContentActionForIntent(admin2TargetState.intent);
+
+      return { label, href: action.href, targetStepKey: 'content' };
+    }
+
+    if (step.key === 'approval') {
+      return { label, href: '#admin-medgen', targetStepKey: 'preview' };
+    }
+
+    if (step.key === 'deploy') {
+      return { label, href: '#admin-site-workflow', targetStepKey: 'approval' };
+    }
+
+    return null;
+  }
+
+  function setAdmin2PrimaryAction(action) {
+    const link = document.querySelector('.admin2-command__next');
+
+    if (!(link instanceof HTMLAnchorElement)) {
+      return;
+    }
+
+    const nextAction = action || { label: 'Выбрать сценарий', href: '#admin2-target-heading' };
+    link.textContent = nextAction.label || 'Открыть шаг';
+    link.href = nextAction.href || '#admin2-target-heading';
+  }
+
+  function setAdmin2BackAction(action) {
+    const link = document.querySelector('.admin2-command__back');
+
+    if (!(link instanceof HTMLAnchorElement)) {
+      return;
+    }
+
+    if (!action) {
+      link.hidden = true;
+      link.classList.remove('is-reset-intent');
+      link.admin2TargetStepKey = '';
+      return;
+    }
+
+    link.hidden = false;
+    link.textContent = action.label || 'Назад к предыдущему сценарию';
+    link.href = action.href || '#admin2-target-heading';
+    link.classList.toggle('is-reset-intent', action.resetIntent === true);
+    link.admin2TargetStepKey = action.targetStepKey || '';
+  }
+
+  function setAdmin2RestartAction(visible) {
+    const link = document.querySelector('.admin2-command__restart');
+
+    if (!(link instanceof HTMLAnchorElement)) {
+      return;
+    }
+
+    link.hidden = visible !== true;
+  }
+
+  function medgenTaskExplicitPreviewUrl(taskRecord) {
+    const task = taskRecord && taskRecord.task && typeof taskRecord.task === 'object' ? taskRecord.task : {};
+    const preview = taskRecord && taskRecord.preview && typeof taskRecord.preview === 'object' ? taskRecord.preview : {};
+
+    return String(taskRecord && taskRecord.preview_url || task.preview_url || preview.preview_url || '').trim();
+  }
+
+  function medgenPreviewCounts(tasks) {
+    const list = Array.isArray(tasks) ? tasks : [];
+    const counts = {
+      ready: 0,
+      accepted: 0,
+      deploying: 0,
+      deployed: 0,
+      failed: 0,
+      explicit_url: 0
+    };
+
+    list.forEach((taskRecord) => {
+      const status = medgenTaskPreviewStatus(taskRecord);
+
+      if (medgenTaskExplicitPreviewUrl(taskRecord)) {
+        counts.explicit_url += 1;
+      }
+
+      if (status === 'preview_ready') {
+        counts.ready += 1;
+      } else if (['accepted', 'release_queued', 'release_prepared'].includes(status)) {
+        counts.accepted += 1;
+      } else if (['pages_deploy_requested', 'cloudflare_pages_deploy_requested', 'cloudflare_pages_deploy_building'].includes(status)) {
+        counts.deploying += 1;
+      } else if (['deployed', 'cloudflare_pages_deployed'].includes(status)) {
+        counts.deployed += 1;
+      } else if (['preview_failed', 'pages_deploy_failed', 'cloudflare_pages_deploy_failed'].includes(status)) {
+        counts.failed += 1;
+      }
+    });
+
+    return counts;
+  }
+
+  function activeReleaseStatus() {
+    const siteId = activeSiteKey();
+
+    return siteId ? adminState.releaseStatusBySite[siteId] || null : null;
+  }
+
+  function admin2PipelineReleaseCounts(status) {
+    if (!status || status.ok === false) {
+      return {
+        preview_ready: 0,
+        accepted: 0,
+        release_queued: 0,
+        release_prepared: 0,
+        pages_deploy_requested: 0,
+        deployed: 0,
+        pages_deploy_failed: 0,
+        pending: 0
+      };
+    }
+
+    return {
+      preview_ready: releaseCount(status, 'preview_ready'),
+      accepted: releaseCount(status, 'accepted'),
+      release_queued: releaseCount(status, 'release_queued'),
+      release_prepared: releaseCount(status, 'release_prepared') || Number(status.prepared_package_count || 0),
+      pages_deploy_requested: releaseCount(status, 'pages_deploy_requested'),
+      deployed: releaseCount(status, 'deployed'),
+      pages_deploy_failed: releaseCount(status, 'pages_deploy_failed'),
+      pending: Number(status.pending_package_count || 0)
+    };
+  }
+
+  function setAdmin2ContextItem(key, state, primary, secondary) {
+    const item = document.querySelector('.admin2-context__item--' + key);
+
+    if (!item) {
+      return;
+    }
+
+    const normalized = normalizeAdmin2PipelineState(state);
+    const primaryNode = item.querySelector('strong');
+    const secondaryNode = item.querySelector('span');
+
+    ['is-blocked', 'is-idle', 'is-pending', 'is-running', 'is-ready', 'is-deployed', 'is-error'].forEach((className) => {
+      item.classList.remove(className);
+    });
+    item.classList.add('is-' + normalized);
+
+    if (primaryNode) {
+      primaryNode.textContent = primary || '-';
+    }
+
+    if (secondaryNode) {
+      secondaryNode.textContent = secondary || '';
+    }
+  }
+
+  function updateAdmin2ActiveSiteContext(context) {
+    const profile = context.profile;
+    const pages = context.pages;
+    const medgenIndex = context.medgenIndex;
+    const medgenCounts = context.medgenCounts;
+    const previewCounts = context.previewCounts;
+    const releaseStatus = context.releaseStatus;
+    const releaseCounts = context.releaseCounts;
+    const releaseHasStatus = context.releaseHasStatus;
+
+    if (!document.querySelector('.admin2-context')) {
+      return;
+    }
+
+    if (!profile) {
+      setAdmin2ContextItem('site', 'blocked', 'Сайт не выбран', 'выберите домен');
+      setAdmin2ContextItem('geo', 'blocked', '-', 'single_root');
+      setAdmin2ContextItem('hosting', 'blocked', '-', 'deploy target');
+      setAdmin2ContextItem('skeleton', 'blocked', '-', 'страницы');
+      setAdmin2ContextItem('medgen', 'blocked', '-', 'status');
+      setAdmin2ContextItem('release', 'blocked', '-', 'readiness');
+      return;
+    }
+
+    const domain = String(profile.domain || profile.site_id || 'site');
+    const locale = String(profile.root_locale || '-');
+    const geo = String(profile.geo_country || profile.market || '').trim();
+
+    setAdmin2ContextItem('site', 'ready', domain, String(profile.display_name || profile.site_id || 'active'));
+    setAdmin2ContextItem('geo', 'ready', locale, geo ? geo + ' · single_root' : 'single_root');
+    setAdmin2ContextItem('hosting', hostingProvider(profile) === 'cloudflare_pages' ? 'ready' : 'pending', hostingModeLabel(profile), profileDeployLabel(profile));
+    setAdmin2ContextItem('skeleton', pages.length > 0 ? 'ready' : 'pending', pages.length > 0 ? pages.length + ' страниц' : 'нет страниц', pages.length > 0 ? 'content scope loaded' : 'нужен skeleton');
+
+    if (medgenIndex && medgenIndex.loading) {
+      setAdmin2ContextItem('medgen', 'running', 'проверяю', 'runtime task summary');
+    } else if (medgenIndex && medgenIndex.error) {
+      setAdmin2ContextItem('medgen', 'error', 'status error', medgenIndex.error);
+    } else if (medgenCounts.failed > 0) {
+      setAdmin2ContextItem('medgen', 'error', medgenCounts.failed + ' ошибок', medgenCounts.total + ' всего');
+    } else if (medgenCounts.active > 0) {
+      setAdmin2ContextItem('medgen', 'running', medgenCounts.active + ' в работе', medgenCounts.ready + ' ready');
+    } else if (medgenCounts.ready > 0) {
+      setAdmin2ContextItem('medgen', 'ready', medgenCounts.ready + ' ready', previewCounts.ready + ' preview');
+    } else {
+      setAdmin2ContextItem('medgen', 'idle', medgenCounts.total > 0 ? medgenCounts.total + ' задач' : 'нет задач', 'можно создать');
+    }
+
+    if (hostingProvider(profile) !== 'cloudflare_pages') {
+      setAdmin2ContextItem('release', 'ready', 'VPS mirror', 'Cloudflare Pages вторичный');
+    } else if (releaseStatus && releaseStatus.ok === false) {
+      setAdmin2ContextItem('release', 'error', 'status error', 'откройте Release');
+    } else if (releaseCounts.pages_deploy_failed > 0) {
+      setAdmin2ContextItem('release', 'error', releaseCounts.pages_deploy_failed + ' failed', 'Cloudflare Pages');
+    } else if (releaseCounts.pages_deploy_requested > 0) {
+      setAdmin2ContextItem('release', 'running', 'deploy идет', 'Cloudflare Pages');
+    } else if (releaseCounts.release_prepared > 0) {
+      setAdmin2ContextItem('release', 'ready', 'готов к deploy', releaseCounts.release_prepared + ' prepared');
+    } else if (releaseCounts.pending > 0 || releaseCounts.accepted > 0 || releaseCounts.release_queued > 0) {
+      setAdmin2ContextItem('release', 'pending', 'нужен release', (releaseCounts.pending || releaseCounts.accepted || releaseCounts.release_queued) + ' пакетов');
+    } else if (releaseCounts.deployed > 0) {
+      setAdmin2ContextItem('release', 'deployed', 'deployed', releaseCounts.deployed + ' пакетов');
+    } else {
+      setAdmin2ContextItem('release', releaseHasStatus ? 'ready' : 'idle', releaseHasStatus ? 'чисто' : 'не проверен', releaseHasStatus ? 'новых правок нет' : 'refresh status');
+    }
+  }
+
+  function admin2IntentDefinition(intent) {
+    return admin2IntentDefinitions[intent] || admin2IntentDefinitions.create_site;
+  }
+
+  function admin2TargetDefinition(target) {
+    return admin2TargetDefinitions[target] || admin2TargetDefinitions.site;
+  }
+
+  function selectedAdmin2IntentDefinition() {
+    return admin2IntentDefinition(admin2TargetState.intent);
+  }
+
+  function selectedAdmin2TargetDefinition() {
+    return admin2TargetDefinition(admin2TargetState.target || selectedAdmin2IntentDefinition().target);
+  }
+
+  function setAdmin2OptionState(selector, selectedValue, profile) {
+    document.querySelectorAll(selector).forEach((button) => {
+      if (!(button instanceof HTMLButtonElement)) {
+        return;
+      }
+
+      const value = String(button.value || '').trim();
+      const selected = value === selectedValue;
+
+      button.classList.toggle('is-selected', selected);
+      button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+      button.disabled = false;
+    });
+  }
+
+  function setAdmin2CommandFocus(mode) {
+    const root = document.querySelector('.admin2-command');
+
+    if (!root) {
+      return;
+    }
+
+    ['target', 'pipeline', 'review'].forEach((name) => {
+      root.classList.toggle('is-focusing-' + name, mode === name);
+    });
+  }
+
+  function scheduleAdmin2ReturnVisibility() {
+    if (admin2ReturnRaf) {
+      return;
+    }
+
+    admin2ReturnRaf = window.requestAnimationFrame(() => {
+      admin2ReturnRaf = 0;
+      updateAdmin2ReturnVisibility();
+    });
+  }
+
+  function updateAdmin2ReturnVisibility() {
+    const link = document.querySelector('.admin2-return');
+    const command = document.querySelector('.admin2-command');
+    const gated = document.querySelector('[data-admin-gated]');
+
+    if (!(link instanceof HTMLAnchorElement) || !command || (gated instanceof HTMLElement && gated.hidden)) {
+      if (link instanceof HTMLAnchorElement) {
+        link.hidden = true;
+        link.classList.remove('is-visible');
+      }
+      return;
+    }
+
+    const rect = command.getBoundingClientRect();
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+    const awayFromPipeline = rect.bottom < 96 || rect.top > viewportHeight - 96;
+
+    link.hidden = !awayFromPipeline;
+    link.classList.toggle('is-visible', awayFromPipeline);
+  }
+
+  function scrollToAdmin2Pipeline() {
+    const command = document.querySelector('.admin2-command');
+
+    setAdmin2CommandFocus('pipeline');
+
+    if (command && typeof command.scrollIntoView === 'function') {
+      command.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else {
+      openAdmin2PipelineHref('#admin2-target-heading');
+    }
+
+    scheduleAdmin2ReturnVisibility();
+  }
+
+  function siteDomainDeleteLabel(profile) {
+    if (!profile) {
+      return '';
+    }
+
+    return String(profile.domain || profile.site_id || 'active site').trim();
+  }
+
+  function openSiteDomainDeleteWidget() {
+    const widget = document.querySelector('[data-site-domain-delete-widget]');
+
+    if (widget && 'open' in widget) {
+      widget.open = true;
+    }
+  }
+
+  function updateSiteDomainDeleteWidget(profile) {
+    const widget = document.querySelector('[data-site-domain-delete-widget]');
+    const domainNode = document.querySelector('[data-site-domain-delete-domain]');
+    const detailNode = document.querySelector('[data-site-domain-delete-detail]');
+    const checkbox = document.querySelector('[data-site-domain-delete-confirm]');
+    const button = document.querySelector('[data-site-domain-delete-submit]');
+    const status = document.querySelector('[data-site-domain-delete-status]');
+    const domain = siteDomainDeleteLabel(profile);
+    const siteKey = profile ? String(profile.site_id || profile.domain || '') : '';
+
+    if (!widget && !domainNode && !checkbox && !button && !status) {
+      return;
+    }
+
+    if (admin2TargetState.intent === 'delete_site') {
+      openSiteDomainDeleteWidget();
+    }
+
+    if (domainNode) {
+      domainNode.textContent = domain || 'Домен не выбран';
+    }
+
+    if (detailNode) {
+      detailNode.textContent = profile
+        ? 'Проверьте домен, включите confirm и только затем запускайте полное удаление сайта.'
+        : 'Сначала выберите активный домен выше.';
+    }
+
+    if (checkbox instanceof HTMLInputElement) {
+      if (checkbox.dataset.siteId !== siteKey) {
+        checkbox.checked = false;
+        checkbox.dataset.siteId = siteKey;
+      }
+
+      checkbox.disabled = !profile;
+    }
+
+    const confirmed = Boolean(profile && checkbox instanceof HTMLInputElement && checkbox.checked);
+
+    if (button instanceof HTMLButtonElement) {
+      button.disabled = !confirmed;
+      button.setAttribute('aria-disabled', confirmed ? 'false' : 'true');
+    }
+
+    if (status) {
+      const message = !profile
+        ? 'Выберите домен, чтобы включить удаление.'
+        : (confirmed
+          ? 'Готово к запуску: нажмите кнопку удаления, чтобы создать GitHub archive snapshot и очистить Cloudflare runtime/Pages + GitHub config для ' + domain + '.'
+          : 'Подтвердите checkbox для домена ' + domain + ', чтобы включить кнопку.');
+
+      status.value = message;
+      status.textContent = message;
+    }
+  }
+
+  function wireSiteDomainDeleteWidget() {
+    const checkbox = document.querySelector('[data-site-domain-delete-confirm]');
+
+    if (!(checkbox instanceof HTMLInputElement) || checkbox.dataset.siteDomainDeleteBound === 'true') {
+      return;
+    }
+
+    checkbox.dataset.siteDomainDeleteBound = 'true';
+    checkbox.addEventListener('change', () => {
+      updateSiteDomainDeleteWidget(activeSiteProfile());
+    });
+  }
+
+  function updateAdmin2TargetSelector(profile) {
+    const root = document.querySelector('.admin2-target');
+
+    if (!root) {
+      return;
+    }
+
+    const intent = selectedAdmin2IntentDefinition();
+    const target = selectedAdmin2TargetDefinition();
+    const status = root.querySelector('.admin2-target__status');
+    const action = root.querySelector('.admin2-target__action');
+    const blocked = !profile && intent.requiresSite === true;
+    const domain = profile ? String(profile.domain || profile.site_id || 'active site') : '';
+    const intentSelected = admin2TargetState.intentTouched === true;
+
+    setAdmin2OptionState('.admin2-target__group--intent .admin2-target-option', intentSelected ? admin2TargetState.intent : '', profile);
+    setAdmin2OptionState('.admin2-target__group--target .admin2-target-option', intentSelected ? admin2TargetState.target : '', profile);
+
+    if (status) {
+      let targetStatus = 'Выбрано: ' + intent.label + ' -> ' + target.label + (domain ? ' для ' + domain + '.' : '.');
+
+      if (!intentSelected) {
+        targetStatus = 'Выберите сценарий: создать сайт, выбрать домен или редактировать существующий.';
+      } else if (admin2TargetState.intent === 'select_site' && !profile) {
+        targetStatus = 'Выбрано: Выбрать домен. Следующий шаг - откройте список сайтов и задайте active site.';
+      } else if (admin2TargetState.intent === 'delete_site' && !profile) {
+        targetStatus = 'Выбрано: Удалить сайт и домен. Сначала выберите домен, который нужно удалить.';
+      } else if (admin2TargetState.intent === 'delete_site') {
+        targetStatus = 'Выбрано: Удалить сайт и домен для ' + domain + '. Действие откроет блок удаления под выбором домена.';
+      } else if (blocked) {
+        targetStatus = intent.label + ': сначала выберите активный сайт.';
+      }
+
+      status.value = targetStatus;
+      status.textContent = targetStatus;
+    }
+
+    if (action instanceof HTMLAnchorElement) {
+      action.href = !intentSelected
+        ? '#admin2-target-heading'
+        : blocked
+          ? '#admin-active-site'
+          : (intent.anchor || target.anchor || '#admin-site-workflow');
+      action.textContent = !intentSelected
+        ? 'Сначала выберите сценарий'
+        : blocked
+          ? 'Выбрать домен'
+          : (admin2TargetState.intent === 'delete_site' ? 'Удалить сайт и домен' : 'Открыть: ' + intent.label);
+      action.classList.toggle('is-disabled', !intentSelected);
+      action.setAttribute('aria-disabled', !intentSelected ? 'true' : 'false');
+    }
+  }
+
+  function setAdmin2ReviewCard(kind, state, primary, secondary, actionLabel, href) {
+    const card = document.querySelector('.admin2-review-card--' + kind);
+
+    if (!card) {
+      return;
+    }
+
+    const normalized = normalizeAdmin2PipelineState(state);
+    const primaryNode = card.querySelector('strong');
+    const secondaryNode = card.querySelector('small');
+    const action = card.querySelector('.admin2-review__action');
+
+    ['is-blocked', 'is-idle', 'is-pending', 'is-running', 'is-ready', 'is-deployed', 'is-error'].forEach((className) => {
+      card.classList.remove(className);
+    });
+    card.classList.add('is-' + normalized);
+
+    if (primaryNode) {
+      primaryNode.textContent = primary || '-';
+    }
+
+    if (secondaryNode) {
+      secondaryNode.textContent = secondary || '';
+    }
+
+    if (action instanceof HTMLAnchorElement) {
+      const rawHref = String(href || '').trim();
+      const safeHref = rawHref.charAt(0) === '#' ? rawHref : safeHttpHref(rawHref);
+
+      action.hidden = !actionLabel;
+      action.textContent = actionLabel || '';
+
+      if (safeHref) {
+        action.setAttribute('href', safeHref);
+      }
+
+      if (safeHref && safeHref.charAt(0) !== '#') {
+        action.target = '_blank';
+        action.rel = 'noopener';
+      } else {
+        action.removeAttribute('target');
+        action.removeAttribute('rel');
+      }
+    }
+
+    card.setAttribute('aria-label', kind + ': ' + (primary || admin2PipelineStateLabel(normalized)) + (secondary ? '. ' + secondary : ''));
+  }
+
+  function latestMedGenPreviewCandidate(tasks) {
+    const previewLikeStatuses = [
+      'preview_ready',
+      'accepted',
+      'release_queued',
+      'release_prepared',
+      'pages_deploy_requested',
+      'cloudflare_pages_deploy_requested',
+      'cloudflare_pages_deploy_building',
+      'deployed',
+      'cloudflare_pages_deployed'
+    ];
+    const list = Array.isArray(tasks) ? tasks.slice() : [];
+
+    list.sort((a, b) => medgenTaskUpdatedAt(b) - medgenTaskUpdatedAt(a));
+
+    for (const taskRecord of list) {
+      const status = medgenTaskPreviewStatus(taskRecord);
+      const previewUrl = safeHttpHref(medgenTaskExplicitPreviewUrl(taskRecord));
+
+      if (previewUrl || previewLikeStatuses.includes(status)) {
+        return {
+          task: taskRecord,
+          title: medgenTaskTitle(taskRecord),
+          status,
+          url: previewUrl
+        };
+      }
+    }
+
+    return null;
+  }
+
+  function latestAdmin2DeploymentUrl(status) {
+    const deployments = status && Array.isArray(status.pages_deployments) ? status.pages_deployments.slice() : [];
+
+    deployments.sort((a, b) => {
+      const left = Date.parse(String(a && (a.created_on || a.created_at || a.modified_on || a.modified_at) || '')) || 0;
+      const right = Date.parse(String(b && (b.created_on || b.created_at || b.modified_on || b.modified_at) || '')) || 0;
+
+      return right - left;
+    });
+
+    for (const deployment of deployments) {
+      const url = safeHttpHref(deployment && (deployment.deployment_url || deployment.url || deployment.alias_url));
+
+      if (url) {
+        return url;
+      }
+    }
+
+    return '';
+  }
+
+  function updateAdmin2ReviewSummary(context) {
+    const root = document.querySelector('.admin2-review');
+
+    if (!root) {
+      return;
+    }
+
+    const statusNode = root.querySelector('.admin2-review__status');
+    const profile = context.profile;
+    const medgenIndex = context.medgenIndex;
+    const medgenCounts = context.medgenCounts;
+    const previewCounts = context.previewCounts;
+    const releaseStatus = context.releaseStatus;
+    const releaseCounts = context.releaseCounts;
+    const releaseHasStatus = context.releaseHasStatus;
+    const medgenTasks = context.medgenTasks;
+    const review = {
+      preview: { state: 'blocked', primary: 'Нет сайта', secondary: 'ожидает active site', action: 'Выбрать сайт', href: '#admin-active-site' },
+      approval: { state: 'blocked', primary: 'Нет preview', secondary: 'approval появится после preview', action: 'Открыть release', href: '#admin-site-workflow' },
+      deploy: { state: 'blocked', primary: 'Нет release', secondary: 'Cloudflare Pages readiness', action: 'Открыть deploy', href: '#admin-site-workflow' },
+      status: 'Выберите сайт, чтобы увидеть preview и deploy readiness.'
+    };
+
+    if (!profile) {
+      setAdmin2ReviewCard('preview', review.preview.state, review.preview.primary, review.preview.secondary, review.preview.action, review.preview.href);
+      setAdmin2ReviewCard('approval', review.approval.state, review.approval.primary, review.approval.secondary, review.approval.action, review.approval.href);
+      setAdmin2ReviewCard('deploy', review.deploy.state, review.deploy.primary, review.deploy.secondary, review.deploy.action, review.deploy.href);
+
+      if (statusNode) {
+        statusNode.value = review.status;
+        statusNode.textContent = review.status;
+      }
+      return;
+    }
+
+    const domain = String(profile.domain || profile.site_id || 'site');
+    const previewCandidate = latestMedGenPreviewCandidate(medgenTasks);
+    const previewUrl = previewCandidate ? previewCandidate.url : '';
+    const deploymentUrl = latestAdmin2DeploymentUrl(releaseStatus);
+    const previewReadyCount = previewCounts.ready || previewCounts.explicit_url || releaseCounts.preview_ready;
+
+    if (medgenIndex && medgenIndex.loading) {
+      review.preview = { state: 'running', primary: 'Проверяю MedGen', secondary: domain + ' · runtime summary', action: 'Открыть MedGen', href: '#admin-medgen' };
+      review.status = 'Идет проверка MedGen status для выбранного сайта.';
+    } else if (medgenIndex && medgenIndex.error) {
+      review.preview = { state: 'error', primary: 'MedGen status error', secondary: medgenIndex.error, action: 'Открыть MedGen', href: '#admin-medgen' };
+      review.status = 'Требует внимания: MedGen status не прочитан.';
+    } else if (previewCounts.failed > 0 || releaseCounts.pages_deploy_failed > 0) {
+      review.preview = { state: 'error', primary: 'Preview/deploy error', secondary: (previewCounts.failed || releaseCounts.pages_deploy_failed) + ' failed', action: 'Открыть release', href: '#admin-site-workflow' };
+      review.status = 'Требует внимания: есть failed preview/deploy status.';
+    } else if (previewCounts.deployed > 0 || releaseCounts.deployed > 0) {
+      review.preview = { state: 'deployed', primary: 'Preview закрыт', secondary: (previewCounts.deployed || releaseCounts.deployed) + ' deployed', action: deploymentUrl ? 'Открыть deploy URL' : 'Открыть release', href: deploymentUrl || '#admin-site-workflow' };
+      review.status = 'Последний preview прошел approval/deploy gate.';
+    } else if (previewCounts.deploying > 0 || releaseCounts.pages_deploy_requested > 0) {
+      review.preview = { state: 'running', primary: 'Deploy идет', secondary: 'Cloudflare Pages requested', action: 'Открыть release', href: '#admin-site-workflow' };
+      review.status = 'Deploy уже запрошен, проверьте статус Cloudflare Pages.';
+    } else if (previewCounts.accepted > 0 || releaseCounts.accepted > 0 || releaseCounts.release_queued > 0 || releaseCounts.release_prepared > 0) {
+      review.preview = { state: 'ready', primary: 'Preview принят', secondary: 'approval уже пройден', action: 'Открыть release', href: '#admin-site-workflow' };
+      review.status = releaseCounts.release_prepared > 0 ? 'Preview принят, пакет готов к deploy.' : 'Preview принят, следующий шаг в release center.';
+    } else if (previewReadyCount > 0 || previewUrl) {
+      review.preview = { state: 'ready', primary: 'Preview готов', secondary: previewCandidate ? previewCandidate.title : previewReadyCount + ' preview ready', action: previewUrl ? 'Открыть preview' : 'Открыть MedGen', href: previewUrl || '#admin-medgen' };
+      review.status = 'Preview готов: проверьте результат и подтвердите approval gate.';
+    } else if (medgenCounts.ready > 0) {
+      review.preview = { state: 'pending', primary: 'Нужен Worker preview', secondary: medgenCounts.ready + ' MedGen ready', action: 'Открыть MedGen', href: '#admin-medgen' };
+      review.status = 'Контент готов, следующий шаг: собрать preview через Worker.';
+    } else {
+      review.preview = { state: 'idle', primary: 'Нет preview', secondary: medgenCounts.total > 0 ? medgenCounts.total + ' MedGen задач без preview' : 'создайте контент или draft', action: 'Открыть MedGen', href: '#admin-medgen' };
+      review.status = 'Preview появится после MedGen или редакторского draft.';
+    }
+
+    if (releaseStatus && releaseStatus.ok === false) {
+      review.approval = { state: 'error', primary: 'Release status error', secondary: 'approval center недоступен', action: 'Открыть release', href: '#admin-site-workflow' };
+    } else if (releaseCounts.pages_deploy_requested > 0) {
+      review.approval = { state: 'ready', primary: 'Approval принят', secondary: 'deploy уже идет', action: 'Открыть release', href: '#admin-site-workflow' };
+    } else if (releaseCounts.release_prepared > 0 || releaseCounts.accepted > 0 || releaseCounts.release_queued > 0) {
+      review.approval = { state: 'ready', primary: 'Approval принят', secondary: (releaseCounts.release_prepared || releaseCounts.accepted || releaseCounts.release_queued) + ' пакетов', action: 'Открыть release', href: '#admin-site-workflow' };
+    } else if (releaseCounts.preview_ready > 0 || previewCounts.ready > 0 || previewCounts.explicit_url > 0) {
+      review.approval = { state: 'pending', primary: 'Нужно подтвердить', secondary: (releaseCounts.preview_ready || previewCounts.ready || previewCounts.explicit_url) + ' preview ready', action: 'Открыть approval', href: '#admin-site-workflow' };
+    } else if (releaseCounts.deployed > 0 || previewCounts.deployed > 0) {
+      review.approval = { state: 'deployed', primary: 'Approval закрыт', secondary: 'последний пакет опубликован', action: 'Открыть release', href: '#admin-site-workflow' };
+    } else {
+      review.approval = { state: 'idle', primary: 'Ждет preview', secondary: releaseHasStatus ? 'новых preview нет' : 'status не проверен', action: 'Открыть release', href: '#admin-site-workflow' };
+    }
+
+    if (hostingProvider(profile) !== 'cloudflare_pages') {
+      review.deploy = { state: 'ready', primary: 'VPS mirror', secondary: 'Cloudflare Pages вторичный', action: 'Открыть deploy', href: '#admin-site-workflow' };
+    } else if (releaseStatus && releaseStatus.ok === false) {
+      review.deploy = { state: 'error', primary: 'Release недоступен', secondary: 'проверьте Worker status', action: 'Открыть deploy', href: '#admin-site-workflow' };
+    } else if (releaseCounts.pages_deploy_failed > 0) {
+      review.deploy = { state: 'error', primary: 'Deploy failed', secondary: releaseCounts.pages_deploy_failed + ' Pages failed', action: 'Открыть deploy', href: '#admin-site-workflow' };
+    } else if (releaseCounts.pages_deploy_requested > 0) {
+      review.deploy = { state: 'running', primary: 'Deploy идет', secondary: 'Cloudflare Pages', action: 'Открыть deploy', href: '#admin-site-workflow' };
+    } else if (releaseCounts.deployed > 0) {
+      review.deploy = { state: 'deployed', primary: 'Deployed', secondary: releaseCounts.deployed + ' пакетов', action: deploymentUrl ? 'Открыть deploy URL' : 'Открыть deploy', href: deploymentUrl || '#admin-site-workflow' };
+    } else if (releaseCounts.release_prepared > 0) {
+      review.deploy = { state: 'ready', primary: 'Готов к deploy', secondary: releaseCounts.release_prepared + ' prepared', action: 'Открыть deploy', href: '#admin-site-workflow' };
+    } else if (releaseCounts.pending > 0 || releaseCounts.accepted > 0 || releaseCounts.release_queued > 0) {
+      review.deploy = { state: 'pending', primary: 'Нужен release', secondary: (releaseCounts.pending || releaseCounts.accepted || releaseCounts.release_queued) + ' пакетов', action: 'Открыть deploy', href: '#admin-site-workflow' };
+    } else {
+      review.deploy = { state: releaseHasStatus ? 'ready' : 'idle', primary: releaseHasStatus ? 'Новых правок нет' : 'Не проверен', secondary: releaseHasStatus ? 'release queue clean' : 'refresh release status', action: 'Открыть deploy', href: '#admin-site-workflow' };
+    }
+
+    if (review.preview.state === 'error' || review.approval.state === 'error' || review.deploy.state === 'error') {
+      review.status = 'Требует внимания: откройте нижний gated слой для диагностики.';
+    } else if (review.deploy.state === 'running') {
+      review.status = 'Deploy запущен, отслеживайте Cloudflare Pages status.';
+    } else if (review.deploy.state === 'ready' && releaseCounts.release_prepared > 0) {
+      review.status = 'Release prepared: deploy доступен только через gated controls ниже.';
+    } else if (review.approval.state === 'pending') {
+      review.status = 'Preview готов: нужен визуальный approve перед публикацией.';
+    } else if (review.preview.state === 'pending') {
+      review.status = 'Следующий шаг: собрать Worker preview для готового MedGen результата.';
+    } else if (review.preview.state === 'idle') {
+      review.status = 'Выберите цель и создайте content/draft, чтобы pipeline дошел до preview.';
+    }
+
+    setAdmin2ReviewCard('preview', review.preview.state, review.preview.primary, review.preview.secondary, review.preview.action, review.preview.href);
+    setAdmin2ReviewCard('approval', review.approval.state, review.approval.primary, review.approval.secondary, review.approval.action, review.approval.href);
+    setAdmin2ReviewCard('deploy', review.deploy.state, review.deploy.primary, review.deploy.secondary, review.deploy.action, review.deploy.href);
+
+    if (statusNode) {
+      statusNode.value = review.status;
+      statusNode.textContent = review.status;
+    }
+  }
+
+  function openAdmin2TargetSelection() {
+    const profile = activeSiteProfile();
+    const intent = selectedAdmin2IntentDefinition();
+
+    if (!profile && intent.requiresSite === true) {
+      setAdmin2CommandFocus('pipeline');
+      scrollToAdminSection('site-workflow', 'admin-active-site');
+      return;
+    }
+
+    setAdmin2CommandFocus('pipeline');
+    if (admin2TargetState.intent === 'delete_site') {
+      openSiteDomainDeleteWidget();
+    }
+    scrollToAdminSection(intent.section || 'site-workflow', intent.focus || '');
+  }
+
+  function wireAdmin2TargetSelector() {
+    document.querySelectorAll('.admin2-target__group--intent .admin2-target-option').forEach((button) => {
+      if (!(button instanceof HTMLButtonElement) || button.classList.contains('is-admin2-target-bound')) {
+        return;
+      }
+
+      button.classList.add('is-admin2-target-bound');
+      button.addEventListener('click', () => {
+        if (button.disabled) {
+          return;
+        }
+
+        const value = String(button.value || '').trim();
+        const definition = admin2IntentDefinition(value);
+
+        admin2TargetState.intent = value;
+        admin2TargetState.target = definition.target || admin2TargetState.target;
+        admin2TargetState.intentTouched = true;
+        admin2ManualStepKey = '';
+        setAdmin2CommandFocus('pipeline');
+        updateAdmin2PipelineState();
+      });
+    });
+
+    document.querySelectorAll('.admin2-target__group--target .admin2-target-option').forEach((button) => {
+      if (!(button instanceof HTMLButtonElement) || button.classList.contains('is-admin2-target-bound')) {
+        return;
+      }
+
+      button.classList.add('is-admin2-target-bound');
+      button.addEventListener('click', () => {
+        if (button.disabled) {
+          return;
+        }
+
+        const value = String(button.value || '').trim();
+        const definition = admin2TargetDefinition(value);
+
+        admin2TargetState.target = value;
+        admin2TargetState.intent = definition.intent || admin2TargetState.intent;
+        admin2TargetState.intentTouched = true;
+        admin2ManualStepKey = '';
+        setAdmin2CommandFocus('pipeline');
+        updateAdmin2PipelineState();
+      });
+    });
+
+    document.querySelectorAll('.admin2-target__action').forEach((link) => {
+      if (!(link instanceof HTMLAnchorElement) || link.classList.contains('is-admin2-target-bound')) {
+        return;
+      }
+
+      link.classList.add('is-admin2-target-bound');
+      link.addEventListener('click', (event) => {
+        event.preventDefault();
+
+        if (link.getAttribute('aria-disabled') === 'true') {
+          openAdmin2PipelineHref('#admin2-target-heading');
+          return;
+        }
+
+        setAdmin2CommandFocus('pipeline');
+        openAdmin2TargetSelection();
+      });
+    });
+  }
+
+  function wireAdmin2ReviewSummary() {
+    document.querySelectorAll('.admin2-review__action').forEach((link) => {
+      if (!(link instanceof HTMLAnchorElement) || link.classList.contains('is-admin2-review-bound')) {
+        return;
+      }
+
+      link.classList.add('is-admin2-review-bound');
+      link.addEventListener('click', (event) => {
+        const href = String(link.getAttribute('href') || '').trim();
+
+        if (href.charAt(0) !== '#') {
+          return;
+        }
+
+        event.preventDefault();
+
+        if (href === '#admin-medgen') {
+          scrollToAdminSection('medgen', 'admin-medgen-task-id');
+          return;
+        }
+
+        if (href === '#admin-site-launch') {
+          scrollToAdminSection('site-launch', '');
+          return;
+        }
+
+        if (href === '#admin-active-site') {
+          scrollToAdminSection('site-workflow', 'admin-active-site');
+          return;
+        }
+
+        scrollToAdminSection('site-workflow', href === '#admin-site-workflow' ? 'admin-release-status-summary' : '');
+      });
+    });
+  }
+
+  function openAdmin2PipelineHref(href) {
+    if (href === '#admin2-target-heading') {
+      setAdmin2CommandFocus('target');
+      const target = byId('admin2-target-heading');
+
+      if (target && typeof target.scrollIntoView === 'function') {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      return;
+    }
+
+    if (href === '#admin-active-site') {
+      setAdmin2CommandFocus('pipeline');
+      scrollToAdminSection('site-workflow', 'admin-active-site');
+      return;
+    }
+
+    if (href === '#admin-site-domain-delete') {
+      setAdmin2CommandFocus('pipeline');
+      openSiteDomainDeleteWidget();
+      scrollToAdminSection('site-workflow', 'admin-site-domain-delete');
+      return;
+    }
+
+    if (href === '#admin-site-launch') {
+      setAdmin2CommandFocus('pipeline');
+      scrollToAdminSection('site-launch', '');
+      return;
+    }
+
+    if (href === '#admin-medgen') {
+      setAdmin2CommandFocus('pipeline');
+      scrollToAdminSection('medgen', 'admin-medgen-task-id');
+      return;
+    }
+
+    if (href === '#admin-editorial') {
+      setAdmin2CommandFocus('pipeline');
+      scrollToAdminSection('editorial', '');
+      return;
+    }
+
+    if (href === '#admin-product-cards') {
+      setAdmin2CommandFocus('pipeline');
+      scrollToAdminSection('product-cards', '');
+      return;
+    }
+
+    if (href === '#admin-design') {
+      setAdmin2CommandFocus('pipeline');
+      scrollToAdminSection('design', '');
+      return;
+    }
+
+    if (href === '#admin-site-fleet-delete') {
+      setAdmin2CommandFocus('pipeline');
+      scrollToAdminSection('sites', 'admin-site-fleet-delete');
+      return;
+    }
+
+    setAdmin2CommandFocus('pipeline');
+    scrollToAdminSection('site-workflow', 'admin-release-status-summary');
+  }
+
+  function wireAdmin2PrimaryAction() {
+    document.querySelectorAll('.admin2-command__next').forEach((link) => {
+      if (!(link instanceof HTMLAnchorElement) || link.classList.contains('is-admin2-next-bound')) {
+        return;
+      }
+
+      link.classList.add('is-admin2-next-bound');
+      link.addEventListener('click', (event) => {
+        const href = String(link.getAttribute('href') || '').trim();
+
+        if (href.charAt(0) !== '#') {
+          return;
+        }
+
+        event.preventDefault();
+        openAdmin2PipelineHref(href);
+      });
+    });
+  }
+
+  function wireAdmin2BackAction() {
+    document.querySelectorAll('.admin2-command__back').forEach((link) => {
+      if (!(link instanceof HTMLAnchorElement) || link.classList.contains('is-admin2-back-bound')) {
+        return;
+      }
+
+      link.classList.add('is-admin2-back-bound');
+      link.addEventListener('click', (event) => {
+        const href = String(link.getAttribute('href') || '').trim();
+
+        if (href.charAt(0) !== '#') {
+          return;
+        }
+
+        event.preventDefault();
+
+        if (link.classList.contains('is-reset-intent')) {
+          admin2TargetState.intentTouched = false;
+          admin2ManualStepKey = '';
+          updateAdmin2PipelineState();
+        }
+
+        if (!link.classList.contains('is-reset-intent') && link.admin2TargetStepKey) {
+          admin2ManualStepKey = String(link.admin2TargetStepKey || '');
+          updateAdmin2PipelineState();
+        }
+
+        openAdmin2PipelineHref(href);
+      });
+    });
+  }
+
+  function wireAdmin2RestartAction() {
+    document.querySelectorAll('.admin2-command__restart').forEach((link) => {
+      if (!(link instanceof HTMLAnchorElement) || link.classList.contains('is-admin2-restart-bound')) {
+        return;
+      }
+
+      link.classList.add('is-admin2-restart-bound');
+      link.addEventListener('click', (event) => {
+        event.preventDefault();
+
+        admin2TargetState.intent = 'create_site';
+        admin2TargetState.target = 'site';
+        admin2TargetState.intentTouched = false;
+        admin2ManualStepKey = '';
+        setAdmin2CommandFocus('target');
+        updateAdmin2PipelineState();
+        openAdmin2PipelineHref('#admin2-target-heading');
+      });
+    });
+  }
+
+  function wireAdmin2ReturnAction() {
+    document.querySelectorAll('.admin2-return').forEach((link) => {
+      if (!(link instanceof HTMLAnchorElement) || link.classList.contains('is-admin2-return-bound')) {
+        return;
+      }
+
+      link.classList.add('is-admin2-return-bound');
+      link.addEventListener('click', (event) => {
+        event.preventDefault();
+        scrollToAdmin2Pipeline();
+      });
+    });
+
+    if (!document.documentElement.classList.contains('is-admin2-return-watch-bound')) {
+      document.documentElement.classList.add('is-admin2-return-watch-bound');
+      window.addEventListener('scroll', scheduleAdmin2ReturnVisibility, { passive: true });
+      window.addEventListener('resize', scheduleAdmin2ReturnVisibility);
+    }
+
+    scheduleAdmin2ReturnVisibility();
+  }
+
+  function updateAdmin2PipelineState() {
+    const root = document.querySelector('.admin2-pipeline');
+    const statusNode = document.querySelector('.admin2-command__status');
+
+    if (!root) {
+      return;
+    }
+
+    const profile = activeSiteProfile();
+    const siteId = activeSiteKey();
+    const manifest = adminState.manifest || {};
+    const pages = profile ? scopedPagesList(manifest.pages || []) : [];
+    const medgenIndex = siteId ? adminState.medgenTaskIndexBySite[siteId] : null;
+    const medgenTasks = medgenIndex && Array.isArray(medgenIndex.tasks) ? medgenIndex.tasks : [];
+    const medgenCounts = medgenTaskCounts(medgenTasks);
+    const previewCounts = medgenPreviewCounts(medgenTasks);
+    const releaseStatus = activeReleaseStatus();
+    const releaseCounts = admin2PipelineReleaseCounts(releaseStatus);
+    const releaseHasStatus = Boolean(releaseStatus);
+    const steps = [];
+    const intent = selectedAdmin2IntentDefinition();
+    const intentReady = admin2TargetState.intentTouched === true;
+
+    updateAdmin2TargetSelector(profile);
+    updateSiteDomainDeleteWidget(profile);
+    updateAdmin2ActiveSiteContext({
+      profile,
+      pages,
+      medgenIndex,
+      medgenCounts,
+      previewCounts,
+      releaseStatus,
+      releaseCounts,
+      releaseHasStatus
+    });
+    updateAdmin2ReviewSummary({
+      profile,
+      medgenIndex,
+      medgenCounts,
+      previewCounts,
+      releaseStatus,
+      releaseCounts,
+      releaseHasStatus,
+      medgenTasks
+    });
+
+    steps.push({
+      key: 'intent',
+      state: intentReady ? 'ready' : 'pending',
+      detail: intentReady ? intent.label : 'выберите: новый сайт или редактура'
+    });
+
+    if (!profile) {
+      steps.push(
+        {
+          key: 'site',
+          state: intentReady ? 'pending' : 'blocked',
+          detail: admin2TargetState.intent === 'create_site' ? 'создайте новый домен' : 'выберите существующий домен'
+        },
+        { key: 'skeleton', state: 'blocked', detail: 'ожидает сайт' },
+        { key: 'content', state: 'blocked', detail: 'ожидает сайт' },
+        { key: 'preview', state: 'blocked', detail: 'ожидает контент' },
+        { key: 'approval', state: 'blocked', detail: 'ожидает preview' },
+        { key: 'deploy', state: 'blocked', detail: 'ожидает approval' }
+      );
+    } else {
+      steps.push({
+        key: 'site',
+        state: 'ready',
+        detail: String(profile.domain || profile.site_id || 'site') + (profile.root_locale ? ' · ' + String(profile.root_locale) : '')
+      });
+
+      if (admin2TargetState.intent === 'delete_site') {
+        steps.push(
+          { key: 'skeleton', state: 'ready', detail: 'не требуется для удаления' },
+          { key: 'content', state: 'pending', detail: 'откройте блок удаления и подтвердите домен' },
+          { key: 'preview', state: 'blocked', detail: 'не требуется для удаления' },
+          { key: 'approval', state: 'blocked', detail: 'archive snapshot обязателен' },
+          { key: 'deploy', state: 'blocked', detail: 'Cloudflare/GitHub cleanup без Actions' }
+        );
+      } else {
+      steps.push({
+        key: 'skeleton',
+        state: pages.length > 0 ? 'ready' : 'pending',
+        detail: pages.length > 0 ? pages.length + ' страниц в scope' : 'создайте skeleton'
+      });
+
+      if (medgenIndex && medgenIndex.loading) {
+        steps.push({ key: 'content', state: 'running', detail: 'читаю MedGen status' });
+      } else if (medgenIndex && medgenIndex.error) {
+        steps.push({ key: 'content', state: 'error', detail: 'MedGen status не прочитан' });
+      } else if (medgenCounts.failed > 0) {
+        steps.push({ key: 'content', state: 'error', detail: medgenCounts.failed + ' ошибок MedGen' });
+      } else if (medgenCounts.active > 0) {
+        steps.push({ key: 'content', state: 'running', detail: medgenCounts.active + ' задач в работе' });
+      } else if (medgenCounts.ready > 0) {
+        steps.push({ key: 'content', state: 'ready', detail: medgenCounts.ready + ' результатов готово' });
+      } else {
+        steps.push({ key: 'content', state: 'idle', detail: medgenCounts.total > 0 ? medgenCounts.total + ' задач без ready' : 'создайте MedGen или редактируйте' });
+      }
+
+      if (medgenIndex && medgenIndex.loading) {
+        steps.push({ key: 'preview', state: 'running', detail: 'жду MedGen status' });
+      } else if (previewCounts.failed > 0 || releaseCounts.pages_deploy_failed > 0) {
+        steps.push({ key: 'preview', state: 'error', detail: 'preview/deploy требует проверки' });
+      } else if (previewCounts.deployed > 0) {
+        steps.push({ key: 'preview', state: 'deployed', detail: previewCounts.deployed + ' preview deployed' });
+      } else if (previewCounts.deploying > 0) {
+        steps.push({ key: 'preview', state: 'running', detail: previewCounts.deploying + ' preview в deploy' });
+      } else if (previewCounts.accepted > 0 || releaseCounts.accepted > 0 || releaseCounts.release_queued > 0 || releaseCounts.release_prepared > 0) {
+        steps.push({ key: 'preview', state: 'ready', detail: 'preview принято' });
+      } else if (previewCounts.ready > 0 || releaseCounts.preview_ready > 0 || previewCounts.explicit_url > 0) {
+        steps.push({ key: 'preview', state: 'ready', detail: (previewCounts.ready || releaseCounts.preview_ready || previewCounts.explicit_url) + ' preview готово' });
+      } else if (medgenCounts.ready > 0) {
+        steps.push({ key: 'preview', state: 'pending', detail: 'соберите Worker preview' });
+      } else {
+        steps.push({ key: 'preview', state: 'idle', detail: 'ожидает готовый контент' });
+      }
+
+      if (releaseStatus && releaseStatus.ok === false) {
+        steps.push({ key: 'approval', state: 'error', detail: 'release status не прочитан' });
+      } else if (releaseCounts.pages_deploy_requested > 0) {
+        steps.push({ key: 'approval', state: 'ready', detail: 'approval принят, deploy идет' });
+      } else if (releaseCounts.release_prepared > 0 || releaseCounts.accepted > 0 || releaseCounts.release_queued > 0) {
+        steps.push({ key: 'approval', state: 'ready', detail: 'результат принят' });
+      } else if (releaseCounts.preview_ready > 0 || previewCounts.ready > 0) {
+        steps.push({ key: 'approval', state: 'pending', detail: 'нужно подтвердить preview' });
+      } else if (releaseCounts.deployed > 0 || previewCounts.deployed > 0) {
+        steps.push({ key: 'approval', state: 'deployed', detail: 'последний approval закрыт' });
+      } else {
+        steps.push({ key: 'approval', state: 'idle', detail: 'ожидает preview' });
+      }
+
+      if (hostingProvider(profile) !== 'cloudflare_pages') {
+        steps.push({ key: 'deploy', state: 'ready', detail: 'VPS mirror вторичный' });
+      } else if (releaseStatus && releaseStatus.ok === false) {
+        steps.push({ key: 'deploy', state: 'error', detail: 'release status недоступен' });
+      } else if (releaseCounts.pages_deploy_failed > 0) {
+        steps.push({ key: 'deploy', state: 'error', detail: releaseCounts.pages_deploy_failed + ' failed deploy' });
+      } else if (releaseCounts.pages_deploy_requested > 0) {
+        steps.push({ key: 'deploy', state: 'running', detail: 'Cloudflare Pages deploy идет' });
+      } else if (releaseCounts.release_prepared > 0) {
+        steps.push({ key: 'deploy', state: 'ready', detail: 'готов к Pages deploy' });
+      } else if (releaseCounts.pending > 0 || releaseCounts.accepted > 0 || releaseCounts.release_queued > 0) {
+        steps.push({ key: 'deploy', state: 'pending', detail: 'подготовьте runtime release' });
+      } else if (releaseCounts.deployed > 0) {
+        steps.push({ key: 'deploy', state: 'deployed', detail: 'последний deploy отмечен' });
+      } else {
+        steps.push({ key: 'deploy', state: releaseHasStatus ? 'ready' : 'idle', detail: releaseHasStatus ? 'новых правок нет' : 'проверьте release status' });
+      }
+      }
+    }
+
+    const computedCurrent = steps.find((step) => ['error', 'running', 'pending', 'idle', 'blocked'].includes(step.state)) || steps[steps.length - 1] || null;
+    const manualCurrent = admin2ManualStepKey
+      ? steps.find((step) => step.key === admin2ManualStepKey) || null
+      : null;
+    const current = manualCurrent || computedCurrent;
+
+    if (admin2ManualStepKey && !manualCurrent) {
+      admin2ManualStepKey = '';
+    }
+
+    root.classList.toggle('has-current', Boolean(current));
+    steps.forEach((step) => {
+      setAdmin2PipelineStep(step.key, step.state, step.detail, current && current.key === step.key);
+    });
+
+    setAdmin2PrimaryAction(admin2PipelineAction(current, { profile, pages, medgenCounts, previewCounts, releaseCounts, releaseStatus }));
+    setAdmin2BackAction(admin2PipelineBackAction(current, { profile, pages, medgenCounts, previewCounts, releaseCounts, releaseStatus }));
+    setAdmin2RestartAction(Boolean(admin2TargetState.intentTouched || admin2ManualStepKey));
+    scheduleAdmin2ReturnVisibility();
+
+    if (statusNode) {
+      const currentIndex = current ? steps.findIndex((step) => step.key === current.key) + 1 : 0;
+      statusNode.value = current
+        ? (current.state === 'error'
+          ? 'Шаг ' + currentIndex + ': требует внимания: ' + current.detail + '.'
+          : 'Шаг ' + currentIndex + ': ' + current.detail + '.')
+        : 'Pipeline готов: выберите следующий рабочий сценарий.';
+      statusNode.textContent = statusNode.value;
+    }
+  }
+
+  function wireAdmin2CommandCenter() {
+    document.querySelectorAll('.admin2-command-card[href^="#"]').forEach((link) => {
+      if (!(link instanceof HTMLAnchorElement) || link.classList.contains('is-admin2-command-bound')) {
+        return;
+      }
+
+      link.classList.add('is-admin2-command-bound');
+      link.addEventListener('click', () => {
+        const target = byId(String(link.getAttribute('href') || '').replace(/^#/, ''));
+
+        if (target && target.tagName.toLowerCase() === 'details') {
+          target.open = true;
+        }
+      });
+    });
+
+    wireAdmin2PrimaryAction();
+    wireAdmin2BackAction();
+    wireAdmin2RestartAction();
+    wireAdmin2ReturnAction();
   }
 
   function siteStageFromReleaseStatus(profile, status) {
@@ -4307,6 +5772,10 @@
       status.pages_deployments_sync_available = deployments.sync_available === true;
     }
 
+    adminState.releaseStatusBySite[siteId] = status || {
+      ok: false,
+      issues: ['release_status_unavailable']
+    };
     renderReleaseStatus(status);
     return status;
   }
@@ -5131,6 +6600,8 @@
       status.textContent = status.value;
     }
 
+    wireSiteDomainDeleteWidget();
+    updateSiteDomainDeleteWidget(profile);
     syncSiteScopedDefaults(profile);
     syncActiveHostingActions(profile);
     syncSshMirrorToggles();
@@ -5217,6 +6688,13 @@
     if (status) {
       status.value = message;
       status.textContent = message;
+    }
+
+    const deleteStatus = document.querySelector('[data-site-domain-delete-status]');
+
+    if (deleteStatus && admin2TargetState.intent === 'delete_site') {
+      deleteStatus.value = message;
+      deleteStatus.textContent = message;
     }
   }
 
@@ -5389,6 +6867,313 @@
     };
   }
 
+  function siteDeleteArchiveTimestamp() {
+    return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z').replace(/[:.]/g, '-');
+  }
+
+  function siteDeleteArchivePath(siteId, timestamp) {
+    return 'archives/sites/' + siteId + '/' + timestamp + '/delete-snapshot.json';
+  }
+
+  function explicitGithubSiteContentPaths(siteId) {
+    const paths = new Set();
+    const pages = scopedPagesList((adminState.manifest || {}).pages || []);
+    const contracts = adminState.actionContracts && Array.isArray(adminState.actionContracts.pages)
+      ? adminState.actionContracts.pages
+      : [];
+
+    pages.concat(contracts).forEach((page) => {
+      const pageSiteId = String(page && page.site_id ? page.site_id : '').trim();
+      const resource = String(page && (page.resource || page.path || page.target_path) ? (page.resource || page.path || page.target_path) : '').trim();
+
+      if (pageSiteId === siteId && isSafeContentPagePath(resource)) {
+        paths.add(resource);
+      }
+    });
+
+    return [...paths].sort();
+  }
+
+  function githubSiteConfigPaths(profile, siteId) {
+    const paths = new Set(['config/sites/' + siteId + '.json', 'config/sites/' + siteId + '.content-index.json']);
+    const contentIndexPath = String(profile && profile.content_index_path ? profile.content_index_path : profile && profile.content_index && profile.content_index.path ? profile.content_index.path : '').trim();
+
+    if (isSafeRepositoryPath(contentIndexPath, 'config/sites/') && contentIndexPath.endsWith('.json')) {
+      paths.add(contentIndexPath);
+    }
+
+    return [...paths].sort();
+  }
+
+  async function readGithubFilesForArchive(paths) {
+    const results = await mapWithConcurrency(paths, 3, async (path) => {
+      const file = await githubReadTextFile(path);
+
+      return {
+        path,
+        ok: file.ok,
+        sha: file.sha || '',
+        content: file.ok ? file.content : '',
+        issues: file.issues || [],
+        http_status: file.http_status || 0
+      };
+    });
+
+    return results;
+  }
+
+  async function deleteGithubFiles(paths) {
+    const results = [];
+
+    for (const path of paths) {
+      const current = await githubReadTextFile(path);
+
+      if (!current.ok) {
+        results.push({
+          ok: current.http_status === 404,
+          skipped: current.http_status === 404,
+          path,
+          issues: current.http_status === 404 ? [] : current.issues || ['read_failed_before_delete']
+        });
+        continue;
+      }
+
+      results.push(await githubDeleteFile(path, 'Delete site file: ' + path, current.sha || ''));
+    }
+
+    return results;
+  }
+
+  async function buildSiteDeleteArchive(siteId, profile) {
+    const timestamp = siteDeleteArchiveTimestamp();
+    const configPaths = githubSiteConfigPaths(profile, siteId);
+    const contentPaths = explicitGithubSiteContentPaths(siteId);
+    const githubFiles = await readGithubFilesForArchive(configPaths.concat(contentPaths));
+    const runtimeSnapshot = hostingProvider(profile) === 'cloudflare_pages'
+      ? await cloudflareExportSiteSnapshot(siteId)
+      : { ok: true, skipped: true, issues: ['cloudflare_runtime_not_used_for_profile'] };
+    const releaseStatus = hostingProvider(profile) === 'cloudflare_pages'
+      ? await cloudflareReleaseStatus(siteId).catch(() => ({ ok: false, issues: ['release_status_unavailable'] }))
+      : { ok: true, skipped: true };
+
+    const archivePath = siteDeleteArchivePath(siteId, timestamp);
+    const runtimeSnapshotOk = hostingProvider(profile) !== 'cloudflare_pages' || Boolean(runtimeSnapshot && runtimeSnapshot.ok);
+    const runtimeSnapshotIssues = runtimeSnapshotOk
+      ? []
+      : (runtimeSnapshot && runtimeSnapshot.issues ? runtimeSnapshot.issues : runtimeSnapshot && runtimeSnapshot.errors ? runtimeSnapshot.errors : ['runtime_snapshot_failed']);
+    const archive = {
+      version: 'cmx-site-delete-archive-v1',
+      created_at: new Date().toISOString(),
+      site_id: siteId,
+      domain: String(profile && profile.domain ? profile.domain : ''),
+      profile,
+      github: {
+        branch: githubBranch(),
+        repository: githubRepository(),
+        config_paths: configPaths,
+        explicit_content_paths: contentPaths,
+        files: githubFiles
+      },
+      cloudflare: {
+        runtime_snapshot: runtimeSnapshot && runtimeSnapshot.snapshot ? runtimeSnapshot.snapshot : runtimeSnapshot,
+        release_status: releaseStatus
+      },
+      delete_plan: {
+        no_github_actions: true,
+        archive_path: archivePath,
+        can_continue_cleanup: runtimeSnapshotOk,
+        blockers: runtimeSnapshotOk ? [] : ['cloudflare_runtime_snapshot_failed'],
+        steps: [
+          'save_archive_to_github_contents',
+          'delete_cloudflare_pages_project_and_domains',
+          'delete_cloudflare_runtime_site_scope',
+          'delete_github_site_config_and_explicit_content_files'
+        ],
+        vps_mirror: {
+          configured: Boolean(profile && profile.deploy_profile && (profile.deploy_profile.public_root || profile.deploy_profile.vps_mirror && profile.deploy_profile.vps_mirror.enabled)),
+          cleanup: 'not_run_from_browser_without_no_actions_cleanup_runtime'
+        }
+      }
+    };
+
+    return {
+      ok: true,
+      archive_path: archivePath,
+      archive,
+      runtime_snapshot_ok: runtimeSnapshotOk,
+      warnings: runtimeSnapshotOk ? [] : ['Cloudflare runtime snapshot failed before cleanup: ' + runtimeSnapshotIssues.join('; ')],
+      config_paths: configPaths,
+      content_paths: contentPaths
+    };
+  }
+
+  function removeSiteFromBrowserState(siteId) {
+    const manifest = adminState.manifest || {};
+
+    if (Array.isArray(manifest.sites)) {
+      manifest.sites = manifest.sites.filter((site) => String(site && site.site_id ? site.site_id : '') !== siteId);
+    }
+
+    if (Array.isArray(manifest.pages)) {
+      manifest.pages = manifest.pages.filter((page) => String(page && page.site_id ? page.site_id : '') !== siteId);
+    }
+
+    if (Array.isArray(manifest.content_indexes)) {
+      manifest.content_indexes = manifest.content_indexes.filter((index) => String(index && index.site_id ? index.site_id : '') !== siteId);
+    }
+
+    if (adminState.actionContracts && Array.isArray(adminState.actionContracts.pages)) {
+      adminState.actionContracts.pages = adminState.actionContracts.pages.filter((page) => String(page && page.site_id ? page.site_id : '') !== siteId);
+    }
+
+    delete adminState.releaseStatusBySite[siteId];
+    delete adminState.runtimeContentIndexesBySite[siteId];
+    delete adminState.medgenTaskIndexBySite[siteId];
+    adminState.activeSiteId = '';
+    writeStoredActiveSite('');
+  }
+
+  async function runSiteFullDeleteAction() {
+    if (!isGithubMode()) {
+      setSiteFleetFormStatus('Полное удаление доступно только в GitHub Pages admin с GitHub token.');
+      setSiteFleetOutput({ ok: false, issues: ['github_pages_admin_required'] });
+      return;
+    }
+
+    const profile = activeSiteProfile();
+    const siteId = cloudflareSiteIdFromProfile(profile || {});
+    const domain = String(profile && profile.domain ? profile.domain : '').trim();
+
+    if (!profile || !siteId || !domain) {
+      setSiteFleetFormStatus('Сначала выберите активный домен для удаления.');
+      setSiteFleetOutput({ ok: false, issues: ['active_site_required', 'domain_required'] });
+      return;
+    }
+
+    const confirmCheckbox = document.querySelector('[data-site-domain-delete-confirm]');
+    if (confirmCheckbox instanceof HTMLInputElement && (!confirmCheckbox.checked || confirmCheckbox.dataset.siteId !== siteId)) {
+      openSiteDomainDeleteWidget();
+      setSiteFleetFormStatus('Сначала подтвердите checkbox в блоке удаления выбранного домена.');
+      setSiteFleetOutput({ ok: false, issues: ['domain_delete_checkbox_required'], site_id: siteId, domain });
+      scrollToAdminSection('site-workflow', 'admin-site-domain-delete-confirm');
+      return;
+    }
+
+    const vpsConfigured = Boolean(profile.deploy_profile && (profile.deploy_profile.public_root || profile.deploy_profile.vps_mirror && profile.deploy_profile.vps_mirror.enabled));
+    const confirmation = [
+      'Полностью удалить сайт ' + domain + '?',
+      '',
+      'Будет создан GitHub archive snapshot с [skip ci], затем будут очищены Cloudflare Pages project/domain bindings, runtime D1/R2/KV scope и GitHub config только для site_id=' + siteId + '.',
+      vpsConfigured ? 'VPS mirror с браузера не очищается: для этого нужен отдельный no-Actions cleanup runtime с SSH-доступом. GitHub Actions не будут запущены.' : '',
+      '',
+      'Продолжить?'
+    ].filter(Boolean).join('\n');
+
+    if (!window.confirm(confirmation)) {
+      setSiteFleetFormStatus('Полное удаление отменено.');
+      return;
+    }
+
+    setSiteFleetFormStatus('Готовлю обязательный архив сайта перед удалением...');
+    setStatusBusy('admin-site-fleet-status', true);
+
+    const result = {
+      ok: false,
+      action: 'site_full_delete_no_actions',
+      site_id: siteId,
+      domain,
+      steps: {}
+    };
+    let finalDomainDeleteStatus = '';
+
+    try {
+      const archive = await buildSiteDeleteArchive(siteId, profile);
+      result.steps.build_archive = archive;
+
+      if (!archive.ok) {
+        setSiteFleetOutput(result);
+        setSiteFleetFormStatus('Удаление остановлено: не удалось собрать archive snapshot.');
+        return;
+      }
+
+      const existingArchive = await githubReadTextFile(archive.archive_path);
+      const archiveSave = await githubSaveJsonFile(archive.archive_path, archive.archive, 'Archive site before full delete: ' + siteId, existingArchive.ok ? existingArchive.sha : '');
+      result.steps.save_archive = archiveSave;
+      result.archive_path = archive.archive_path;
+
+      if (!archiveSave.ok) {
+        finalDomainDeleteStatus = 'Удаление остановлено: archive snapshot не сохранен в GitHub.';
+        setSiteFleetOutput(result);
+        setSiteFleetFormStatus(finalDomainDeleteStatus);
+        return;
+      }
+
+      if (archive.runtime_snapshot_ok === false) {
+        result.warnings = archive.warnings || ['cloudflare_runtime_snapshot_failed'];
+        finalDomainDeleteStatus = 'Архив сохранен, но удаление остановлено: Cloudflare Worker не вернул runtime snapshot. Обновите Worker и повторите cleanup.';
+        setSiteFleetOutput(result);
+        setSiteFleetFormStatus(finalDomainDeleteStatus);
+        return;
+      }
+
+      if (hostingProvider(profile) === 'cloudflare_pages') {
+        setSiteFleetFormStatus('Удаляю Cloudflare Pages project и domain bindings...');
+        const pagesDelete = await cloudflareDeletePagesProject(siteId);
+        result.steps.cloudflare_pages_delete = pagesDelete;
+
+        if (!pagesDelete.ok) {
+          finalDomainDeleteStatus = 'Архив сохранен, но удаление остановлено: Cloudflare Pages/domain cleanup не прошел.';
+          setSiteFleetOutput(result);
+          setSiteFleetFormStatus(finalDomainDeleteStatus);
+          return;
+        }
+
+        setSiteFleetFormStatus('Удаляю runtime scope сайта в Cloudflare D1/R2/KV...');
+        const runtimeDelete = await cloudflareDeleteSiteRuntime(siteId, domain);
+        result.steps.cloudflare_runtime_delete = runtimeDelete;
+
+        if (!runtimeDelete.ok) {
+          finalDomainDeleteStatus = 'Архив сохранен, но удаление остановлено: Cloudflare runtime cleanup не прошел.';
+          setSiteFleetOutput(result);
+          setSiteFleetFormStatus(finalDomainDeleteStatus);
+          return;
+        }
+      } else {
+        result.steps.cloudflare_pages_delete = { ok: true, skipped: true, reason: 'profile_provider_not_cloudflare_pages' };
+        result.steps.cloudflare_runtime_delete = { ok: true, skipped: true, reason: 'profile_provider_not_cloudflare_pages' };
+      }
+
+      setSiteFleetFormStatus('Удаляю GitHub config/content только для выбранного site_id...');
+      const deletePaths = archive.config_paths.concat(archive.content_paths);
+      const githubDeletes = await deleteGithubFiles(deletePaths);
+      result.steps.github_deletes = githubDeletes;
+      result.ok = githubDeletes.every((item) => item && item.ok);
+      result.archive_path = archive.archive_path;
+      result.warnings = vpsConfigured
+        ? ['VPS mirror не очищен: браузер не получает SSH secrets, а GitHub Actions запрещены. Нужен отдельный no-Actions cleanup runtime.']
+        : [];
+
+      if (result.ok) {
+        removeSiteFromBrowserState(siteId);
+        renderSiteWorkflow(adminState.manifest || {});
+        renderSiteFleet(adminState.manifest || {});
+        renderAdminMetrics(adminState.manifest || {});
+        setSectionCounts(adminState.manifest || {}, adminState.actionContracts || {});
+      }
+
+      setSiteFleetOutput(result);
+      setSiteFleetFormStatus(result.ok
+        ? 'Сайт удален из Cloudflare runtime/Pages и GitHub config. Архив: ' + archive.archive_path
+        : 'Удаление завершилось частично; проверьте JSON результата.');
+    } finally {
+      setStatusBusy('admin-site-fleet-status', false);
+      updateSiteDomainDeleteWidget(activeSiteProfile());
+      if (finalDomainDeleteStatus && !result.ok) {
+        setSiteFleetFormStatus(finalDomainDeleteStatus);
+      }
+    }
+  }
+
   async function runSiteFleetAction(operation, dryRun) {
     if (!isGithubMode()) {
       setSiteFleetFormStatus('Site Fleet сохраняется через CMS-admin_v2 на GitHub Pages.');
@@ -5406,7 +7191,7 @@
       ? ' Заполненные Environment secrets будут зашифрованы и записаны.'
       : '';
     const confirmationMessage = operation === 'archive_site'
-      ? 'Архивировать профиль сайта?'
+      ? 'Удалить сайт и домен из активной панели? Профиль будет переведен в archived; публичные Cloudflare/VPS файлы и DNS/domain binding не удаляются без отдельного workflow.'
       : (provider === 'cloudflare_pages'
           ? 'Сохранить профиль сайта в Cloudflare runtime и GitHub Contents без запуска Actions?' + environmentSecretConfirmSuffix
           : 'Сохранить legacy VPS профиль через GitHub Actions?' + environmentSecretConfirmSuffix);
@@ -5547,7 +7332,7 @@
     const dryRunButton = document.querySelector('[data-site-fleet-dry-run]');
     const saveButton = document.querySelector('[data-site-fleet-save]');
     const newButton = document.querySelector('[data-site-fleet-new]');
-    const archiveButton = document.querySelector('[data-site-fleet-archive]');
+    const archiveButtons = document.querySelectorAll('[data-site-fleet-archive]');
     const checkSecretsButton = document.querySelector('[data-site-fleet-check-secrets]');
     const saveEnvironmentSecretsButton = document.querySelector('[data-site-fleet-save-environment-secrets]');
     const clearEnvironmentSecretValuesButton = document.querySelector('[data-site-fleet-clear-environment-secret-values]');
@@ -5572,10 +7357,20 @@
       });
     }
 
-    if (archiveButton && archiveButton.dataset.siteFleetBound !== 'true') {
+    archiveButtons.forEach((archiveButton) => {
+      if (!(archiveButton instanceof HTMLButtonElement) || archiveButton.dataset.siteFleetBound === 'true') {
+        return;
+      }
+
       archiveButton.dataset.siteFleetBound = 'true';
-      archiveButton.addEventListener('click', () => runSiteFleetAction('archive_site', false));
-    }
+      archiveButton.addEventListener('click', () => {
+        if (archiveButton.disabled || archiveButton.getAttribute('aria-disabled') === 'true') {
+          return;
+        }
+
+        runSiteFullDeleteAction();
+      });
+    });
 
     if (checkSecretsButton && checkSecretsButton.dataset.siteFleetBound !== 'true') {
       checkSecretsButton.dataset.siteFleetBound = 'true';
@@ -8320,7 +10115,7 @@
       'data-site-fleet-dry-run': 'Проверяет профиль сайта без записи.',
       'data-site-fleet-save': 'Сохраняет профиль сайта: домен, GEO, deploy и secret_refs.',
       'data-site-fleet-new': 'Очищает форму для нового профиля сайта.',
-      'data-site-fleet-archive': 'Архивирует профиль сайта. Публичные файлы не удаляются без отдельного workflow.',
+      'data-site-fleet-archive': 'Запускает полное удаление выбранного сайта: GitHub archive snapshot, Cloudflare Pages/domain cleanup, runtime cleanup и GitHub config cleanup без GitHub Actions.',
       'data-site-fleet-check-secrets': 'Проверяет в GitHub Environment выбранного сайта только наличие нужных secret refs. Значения секретов админка не получает и не показывает.',
       'data-site-fleet-save-environment-secrets': 'Создает GitHub Environment выбранного сайта и сохраняет заполненные SSH/Cloudflare значения как encrypted secrets. Сырые значения после записи очищаются из формы.',
       'data-site-fleet-clear-environment-secret-values': 'Очищает введенные SSH/Cloudflare значения из формы без изменения GitHub Environment.',
@@ -9228,6 +11023,63 @@
       message,
       existingSha
     );
+  }
+
+  async function githubDeleteFile(relativePath, message, sha) {
+    const repository = githubRepository();
+    const ref = githubBranch();
+
+    if (!repository) {
+      return { ok: false, issues: ['GitHub repository config is missing.'], path: relativePath };
+    }
+
+    if (!githubToken()) {
+      return { ok: false, issues: ['GitHub token не подключен.'], path: relativePath };
+    }
+
+    if (!sha) {
+      return { ok: false, issues: ['GitHub file sha is required for delete.'], path: relativePath };
+    }
+
+    try {
+      const response = await fetch(githubApiUrl('/repos/' + repository + '/contents/' + githubContentsPath(relativePath)), {
+        method: 'DELETE',
+        headers: Object.assign({}, githubHeaders(), {
+          'Content-Type': 'application/json'
+        }),
+        body: JSON.stringify({
+          message: String(message || 'Delete CMS file') + ' [skip ci]',
+          sha,
+          branch: ref
+        })
+      });
+      const payload = await readResponseJson(response);
+
+      if (!response.ok) {
+        return {
+          ok: false,
+          http_status: response.status,
+          path: relativePath,
+          issues: [payload.message || 'GitHub Contents delete failed.'],
+          data: payload
+        };
+      }
+
+      return {
+        ok: true,
+        action: 'github_contents_delete',
+        path: relativePath,
+        commit: payload && payload.commit ? payload.commit.sha : '',
+        warnings: ['Удалено прямым GitHub Contents commit с [skip ci]; Actions не запускались.']
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        action: 'github_contents_delete',
+        path: relativePath,
+        issues: ['GitHub Contents delete failed: ' + (error && error.message ? error.message : 'network error')]
+      };
+    }
   }
 
   function pageTargetPathForPayload(payload, contracts) {
@@ -10317,6 +12169,7 @@
     })));
 
     fillSelect(document.querySelector('[data-product-card-existing-page]'), options);
+    fillSelect(document.querySelector('[data-product-card-delete-page]'), options);
   }
 
   function setProductCardSelectionSummary(page, values) {
@@ -10798,6 +12651,73 @@
     }
   }
 
+  async function submitProductCardArchive(authContract) {
+    if (!requireActiveSiteContext(setProductCardStatus, setProductCardOutput)) {
+      return siteContextError();
+    }
+
+    const deleteSelect = document.querySelector('[data-product-card-delete-page]');
+    const selectedResource = deleteSelect ? deleteSelect.value : '';
+
+    if (!selectedResource) {
+      const result = { ok: false, issues: ['Выберите карточку товара для удаления.'] };
+
+      setProductCardOutput(result);
+      setProductCardStatus('Удаление карточки остановлено: товар не выбран.');
+
+      return result;
+    }
+
+    const payload = {
+      request_id: requestId('req-product-card-archive'),
+      actor: editorialActorPayload(),
+      items: [{ resource: selectedResource, mode: '410' }]
+    };
+
+    setProductCardStatus('Запрос archive endpoint для карточки...');
+    setProductCardOutput(payload);
+
+    if (cloudflareRuntimeForActiveSite()) {
+      const result = await cloudflareArchivePagePackage(selectedResource);
+
+      setProductCardOutput(result);
+      setProductCardStatus(result.ok
+        ? (result.status === 'preview_ready' ? 'Preview удаления карточки сохранен в Cloudflare; требуется approval token.' : 'Карточка удалена из runtime без GitHub Actions.')
+        : 'Cloudflare archive карточки вернул ошибку.');
+
+      return result;
+    }
+
+    if (isGithubMode()) {
+      const result = await githubArchivePageContent(selectedResource);
+
+      setProductCardOutput(result);
+      setProductCardStatus(result.ok ? 'Карточка помечена archived/noindex в GitHub без запуска Actions.' : 'Архивация карточки через GitHub Contents вернула ошибку.');
+
+      return result;
+    }
+
+    try {
+      const result = await editorialFetch(authContract, 'editorial_archive', payload);
+
+      setProductCardOutput(result);
+      setProductCardStatus(result.ok ? 'Карточка удалена; страница исключена из публичной сборки.' : 'Delete endpoint карточки вернул ответ сервера.');
+
+      if (result.ok) {
+        loadAdminBootstrap(readAuthContract() || authContract);
+      }
+
+      return result;
+    } catch (error) {
+      const result = { ok: false, issues: ['product card archive endpoint unavailable'] };
+
+      setProductCardOutput(result);
+      setProductCardStatus('Endpoint удаления карточки недоступен.');
+
+      return result;
+    }
+  }
+
   function wireProductCardEditor(contracts, authContract) {
     const widget = document.querySelector('[data-product-card-editor]');
     const config = editorialConfig(contracts);
@@ -10818,6 +12738,7 @@
       const mediaButton = widget.querySelector('[data-product-card-media-save]');
       const publishButton = widget.querySelector('[data-product-card-publish]');
       const deployButton = widget.querySelector('[data-github-static-deploy]');
+      const deleteButton = widget.querySelector('[data-product-card-delete-submit]');
 
       widget.dataset.productCardBound = 'true';
 
@@ -10903,6 +12824,10 @@
 
       if (deployButton) {
         deployButton.addEventListener('click', () => githubDispatchStaticDeploy(setProductCardStatus, setProductCardOutput));
+      }
+
+      if (deleteButton) {
+        deleteButton.addEventListener('click', () => submitProductCardArchive(activeAuthContract(authContract)));
       }
     }
 
@@ -12990,6 +14915,7 @@
     adminState.manifest = null;
     adminState.agentKeys = [];
     adminState.activeSiteId = '';
+    adminState.releaseStatusBySite = {};
     designState.booted = false;
     resetEditorialWidgetState();
     setGatedVisible(false);
@@ -13070,6 +14996,10 @@
     setSectionCounts(manifest, contracts);
     setAdminBootStatus('Готово');
     enhanceStaticAdminHelp();
+    wireAdmin2CommandCenter();
+    wireAdmin2TargetSelector();
+    wireAdmin2ReviewSummary();
+    updateAdmin2PipelineState();
     wirePageFilters();
     wireMedGenPanel();
     bootComposer();
