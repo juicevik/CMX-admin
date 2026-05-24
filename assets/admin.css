@@ -4765,6 +4765,41 @@ body[data-site-context="missing"] .site-workflow__active select {
   letter-spacing: 0.04em;
 }
 
+.medgen-product-bundle__progress {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--admin-space-3);
+  margin-top: var(--admin-space-4);
+}
+
+.medgen-product-bundle__progress article {
+  display: grid;
+  gap: 0.28rem;
+  min-width: 0;
+  padding: 0.78rem 0.9rem;
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-control);
+  background: var(--admin-surface-soft);
+}
+
+.medgen-product-bundle__progress article[data-state="ready"],
+.medgen-product-bundle__progress article[data-state="preview"],
+.medgen-product-bundle__progress article[data-state="deployed"] {
+  border-color: color-mix(in srgb, var(--admin-accent) 50%, var(--admin-border));
+  background: color-mix(in srgb, var(--admin-accent) 8%, var(--admin-surface));
+}
+
+.medgen-product-bundle__progress strong {
+  color: var(--admin-text);
+  font-size: 0.88rem;
+}
+
+.medgen-product-bundle__progress span {
+  color: var(--admin-muted);
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
 .ssh-mirror-toggle {
   display: inline-flex;
   align-items: center;

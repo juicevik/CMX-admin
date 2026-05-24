@@ -125,6 +125,15 @@
       requiresSite: true,
       detail: 'task, status, preview'
     },
+    product_bundle: {
+      label: 'Добавить товар через MedGen',
+      target: 'product_bundle_target',
+      section: 'medgen',
+      anchor: '#admin-medgen-product-bundle',
+      focus: 'admin-medgen-product-name',
+      requiresSite: true,
+      detail: 'товар + эксперт + обзор'
+    },
     product_card: {
       label: 'Работать с карточкой',
       target: 'product_card_target',
@@ -202,6 +211,14 @@
       intent: 'product_card',
       section: 'product-cards',
       anchor: '#admin-product-cards',
+      requiresSite: true
+    },
+    product_bundle_target: {
+      label: 'Товар + эксперт + обзор',
+      intent: 'product_bundle',
+      section: 'medgen',
+      anchor: '#admin-medgen-product-bundle',
+      focus: 'admin-medgen-product-name',
       requiresSite: true
     },
     design_target: {
@@ -2889,6 +2906,10 @@
       return { label: 'Открыть карточки', href: '#admin-product-cards' };
     }
 
+    if (intent === 'product_bundle') {
+      return { label: 'Открыть товарную связку', href: '#admin-medgen-product-bundle' };
+    }
+
     if (intent === 'design') {
       return { label: 'Открыть дизайн', href: '#admin-design' };
     }
@@ -3377,7 +3398,7 @@
       let targetStatus = 'Выбрано: ' + intent.label + ' -> ' + target.label + (domain ? ' для ' + domain + '.' : '.');
 
       if (!intentSelected) {
-        targetStatus = 'Выберите сценарий: создать сайт, выбрать домен или редактировать существующий.';
+        targetStatus = 'Выберите сценарий: создать сайт, выбрать домен, товарную связку или редактировать существующий.';
       } else if (admin2TargetState.intent === 'select_site' && !profile) {
         targetStatus = 'Выбрано: Выбрать домен. Следующий шаг - откройте список сайтов и задайте active site.';
       } else if (admin2TargetState.intent === 'delete_site' && !profile) {
@@ -4235,8 +4256,31 @@
     return {};
   }
 
-  function medgenTaskSiteDomain(taskRecord) {
+  function medgenTaskRequestPayload(taskRecord) {
     const payload = medgenTaskPayload(taskRecord);
+
+    return payload.request && typeof payload.request === 'object' && !Array.isArray(payload.request)
+      ? payload.request
+      : payload;
+  }
+
+  function medgenTaskExtra(taskRecord) {
+    const request = medgenTaskRequestPayload(taskRecord);
+    const payload = medgenTaskPayload(taskRecord);
+
+    if (request.extra && typeof request.extra === 'object' && !Array.isArray(request.extra)) {
+      return request.extra;
+    }
+
+    if (payload.extra && typeof payload.extra === 'object' && !Array.isArray(payload.extra)) {
+      return payload.extra;
+    }
+
+    return {};
+  }
+
+  function medgenTaskSiteDomain(taskRecord) {
+    const payload = medgenTaskRequestPayload(taskRecord);
     const site = payload.site && typeof payload.site === 'object' ? payload.site : {};
 
     return normalizedDomainKey(site.domain || site.base_url || taskRecord.site_domain || '');
@@ -4278,12 +4322,15 @@
     const task = taskRecord && taskRecord.task && typeof taskRecord.task === 'object' ? taskRecord.task : {};
     const payload = medgenTaskPayload(taskRecord);
     const article = payload.article && typeof payload.article === 'object' ? payload.article : null;
+    const result = payload.result && typeof payload.result === 'object' ? payload.result : {};
+    const cmxPage = result.cmx_page && typeof result.cmx_page === 'object' ? result.cmx_page : null;
 
     return status === 'succeeded' && (
       task.result_ready === true
       || task.has_result === true
       || task.has_article === true
       || article !== null
+      || cmxPage !== null
     );
   }
 
@@ -4378,7 +4425,7 @@
   }
 
   function medgenTaskLabel(taskRecord) {
-    const payload = medgenTaskPayload(taskRecord);
+    const payload = medgenTaskRequestPayload(taskRecord);
     const task = taskRecord && taskRecord.task && typeof taskRecord.task === 'object' ? taskRecord.task : {};
     const id = String(task.task_id || taskRecord.task_id || '').slice(0, 12);
     const title = String(payload.page_title || payload.page_key || payload.type || 'MedGen task');
@@ -4433,14 +4480,14 @@
   }
 
   function medgenTaskTitle(taskRecord) {
-    const payload = medgenTaskPayload(taskRecord);
+    const payload = medgenTaskRequestPayload(taskRecord);
     const task = taskRecord && taskRecord.task && typeof taskRecord.task === 'object' ? taskRecord.task : {};
 
     return String(task.page_title || payload.page_title || payload.page_key || task.type || payload.type || 'MedGen page').trim();
   }
 
   function medgenTaskPageKey(taskRecord) {
-    const payload = medgenTaskPayload(taskRecord);
+    const payload = medgenTaskRequestPayload(taskRecord);
     const task = taskRecord && taskRecord.task && typeof taskRecord.task === 'object' ? taskRecord.task : {};
 
     return String(task.page_key || payload.page_key || '').trim();
@@ -4477,7 +4524,7 @@
   }
 
   function medgenTaskType(taskRecord) {
-    const payload = medgenTaskPayload(taskRecord);
+    const payload = medgenTaskRequestPayload(taskRecord);
     const task = taskRecord && taskRecord.task && typeof taskRecord.task === 'object' ? taskRecord.task : {};
 
     return String(task.type || task.task_type || payload.type || '').trim();
@@ -4609,6 +4656,7 @@
 
     target.innerHTML = medgenTaskMonitorHtml(index && Array.isArray(index.tasks) ? index.tasks : []);
     wireMedGenTaskMonitor();
+    syncMedGenProductBundleStatus();
     syncSshMirrorToggles();
   }
 
@@ -5850,43 +5898,27 @@
 
     const sshRequested = opts.ssh_mirror_requested === true
       || (opts.ssh_mirror_requested !== false && sshMirrorRequested('[data-ssh-mirror-deploy]'));
-    const sshPayload = sshMirrorPayload(sshRequested, opts.source || 'admin_release_status_panel');
-
-    resetReleaseStatusView(sshRequested
-      ? 'Запрашиваю Cloudflare Pages deploy через Worker; после него будет запрошен SSH mirror workflow...'
-      : 'Запрашиваю Cloudflare Pages deploy через Worker. GitHub Actions не запускаются...', 'loading');
-
-    const result = await cloudflareRequestPagesDeployment(siteId, {
-      request_id: opts.request_id || 'pages-deploy-' + Date.now(),
+    const builderCommand = 'php bin/cms release:cloudflare --site-id=' + siteId + ' --target=' + ((deploy && deploy.environment) || 'production');
+    const result = {
+      ok: true,
+      status: 'builder_release_required',
+      site_id: siteId,
       pages_project: cloudflare.pages_project || '',
-      branch: cloudflare.branch || '',
-      force: opts.force === true,
-      source: opts.source || 'admin_release_status_panel',
       ssh_mirror_requested: sshRequested,
-      ssh_mirror: sshPayload
-    });
-    let sshMirrorResult = null;
+      builder_release: {
+        required: true,
+        command: builderCommand,
+        approve_hint: 'Run once for preview; rerun with --approve-payload-sha256=<payload_sha256> after approval.'
+      },
+      warnings: [
+        'Cloudflare Pages deploy is now performed by the Ubuntu builder and Worker Direct Upload. GitHub Actions were not dispatched.'
+      ]
+    };
 
-    if (sshRequested && result && result.ok && result.status !== 'no_prepared_release') {
-      sshMirrorResult = await requestSshMirrorDeployForActiveSite(opts.source || 'admin_release_status_panel');
-      result.ssh_mirror_workflow = sshMirrorResult;
-    }
-
-    if (result && result.ok) {
-      const count = Number(result.package_count || 0);
-      const message = result.status === 'no_prepared_release'
-        ? 'Подготовленного runtime release нет. Cloudflare Pages deploy не запускался.'
-        : 'Cloudflare Pages deploy запрошен через Worker: ' + count + ' пакетов.'
-          + (sshRequested
-            ? (sshMirrorResult && sshMirrorResult.ok
-              ? ' SSH mirror workflow запрошен отдельно.'
-              : ' SSH mirror не запущен: ' + ((sshMirrorResult && Array.isArray(sshMirrorResult.issues) && sshMirrorResult.issues.join('; ')) || 'проверьте deploy workflow/secrets.'))
-            : ' GitHub Actions не запускались.');
-      resetReleaseStatusView(message, result.status === 'no_prepared_release' ? 'clean' : 'prepared');
-    } else {
-      const issues = result && Array.isArray(result.issues) ? result.issues.join('; ') : 'pages deployment endpoint недоступен';
-      resetReleaseStatusView('Cloudflare Pages deploy не запрошен: ' + issues, 'error');
-    }
+    resetReleaseStatusView(
+      'Release готовится через Ubuntu builder. Команда: ' + builderCommand + (sshRequested ? ' SSH mirror будет отдельным шагом после Pages deploy.' : ''),
+      'prepared'
+    );
 
     await refreshReleaseStatusForActiveSite({ silent: true });
     return result;
@@ -8685,6 +8717,23 @@
     }
   }
 
+  function setMedGenProductBundleStatus(message) {
+    const status = byId('admin-medgen-product-bundle-status') || document.querySelector('[data-medgen-product-bundle-status]');
+
+    if (status) {
+      status.value = message;
+      status.textContent = message;
+    }
+  }
+
+  function setMedGenProductBundleOutput(payload) {
+    const output = byId('admin-medgen-product-bundle-output') || document.querySelector('[data-medgen-product-bundle-output]');
+
+    if (output) {
+      output.value = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
+    }
+  }
+
   function collectMedGenPayload() {
     const payload = {};
 
@@ -8781,6 +8830,603 @@
       payload,
       publish: true
     };
+  }
+
+  function medGenBundleField(selector, fallbackSelector) {
+    const field = document.querySelector(selector);
+
+    if ((field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement || field instanceof HTMLSelectElement) && field.value.trim() !== '') {
+      return field.value.trim();
+    }
+
+    const fallback = fallbackSelector ? document.querySelector(fallbackSelector) : null;
+    if ((fallback instanceof HTMLInputElement || fallback instanceof HTMLTextAreaElement || fallback instanceof HTMLSelectElement) && fallback.value.trim() !== '') {
+      return fallback.value.trim();
+    }
+
+    return '';
+  }
+
+  function medGenLocaleForActiveSite() {
+    const profile = activeSiteProfile() || {};
+    const field = byId('admin-medgen-locale');
+    const raw = String(
+      profile.root_locale
+      || profile.locale
+      || profile.default_locale
+      || (field instanceof HTMLInputElement ? field.value : '')
+      || 'bg_BG'
+    ).trim().replace('-', '_');
+
+    if (/^[a-z]{2}_[A-Z]{2}$/.test(raw)) {
+      return raw;
+    }
+
+    if (/^[a-z]{2}$/i.test(raw)) {
+      const language = raw.toLowerCase();
+      const country = String(profile.geo_country || language).trim().slice(0, 2).toUpperCase();
+
+      return language + '_' + (country || language.toUpperCase());
+    }
+
+    return 'bg_BG';
+  }
+
+  function medGenProductBundleSite() {
+    const profile = activeSiteProfile() || {};
+    const domain = String(profile.domain || profile.base_url || medGenBundleField('#admin-medgen-site-domain', '') || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    const name = String(profile.display_name || profile.name || medGenBundleField('#admin-medgen-site-name', '') || domain || activeSiteKey()).trim();
+
+    return {
+      name,
+      domain
+    };
+  }
+
+  function medGenProductBundleRoleLabel(role) {
+    return {
+      product_card: 'Товар',
+      expert_profile: 'Эксперт',
+      product_review: 'Обзор'
+    }[role] || role || 'Задача';
+  }
+
+  function medGenProductBundleTaskRole(taskRecord) {
+    const extra = medgenTaskExtra(taskRecord);
+
+    return String(extra.bundle_role || extra.cmx_content_type || '').trim();
+  }
+
+  function medGenProductBundleTaskId(taskRecord) {
+    const extra = medgenTaskExtra(taskRecord);
+
+    return String(extra.bundle_id || '').trim();
+  }
+
+  function medGenProductBundleTasks(bundleId) {
+    const siteId = activeSiteKey();
+    const index = siteId ? adminState.medgenTaskIndexBySite[siteId] : null;
+    const tasks = index && Array.isArray(index.tasks) ? index.tasks : [];
+    const normalizedBundleId = String(bundleId || '').trim();
+
+    return tasks.filter((taskRecord) => {
+      const extra = medgenTaskExtra(taskRecord);
+
+      return extra.cmx_bundle_type === 'cmx_product_bundle'
+        && (!normalizedBundleId || medGenProductBundleTaskId(taskRecord) === normalizedBundleId);
+    });
+  }
+
+  function medGenProductBundleStatus(bundleId) {
+    const expectedRoles = ['product_card', 'expert_profile', 'product_review'];
+    const tasks = medGenProductBundleTasks(bundleId);
+    const roleState = {};
+
+    expectedRoles.forEach((role) => {
+      roleState[role] = {
+        role,
+        label: medGenProductBundleRoleLabel(role),
+        present: false,
+        ready: false,
+        preview_ready: false,
+        deployed: false,
+        task_id: ''
+      };
+    });
+
+    tasks.forEach((taskRecord) => {
+      const role = medGenProductBundleTaskRole(taskRecord);
+
+      if (!roleState[role]) {
+        return;
+      }
+
+      const previewStatus = medgenTaskPreviewStatus(taskRecord);
+
+      roleState[role] = Object.assign({}, roleState[role], {
+        present: true,
+        ready: medgenTaskIsReady(taskRecord),
+        preview_ready: ['preview_ready', 'accepted', 'release_queued', 'release_prepared', 'pages_deploy_requested', 'cloudflare_pages_deploy_requested', 'deployed', 'cloudflare_pages_deployed'].includes(previewStatus) || Boolean(medgenTaskPreviewUrl(taskRecord)),
+        deployed: ['deployed', 'cloudflare_pages_deployed'].includes(previewStatus),
+        task_id: medgenTaskId(taskRecord),
+        status: medgenTaskStatus(taskRecord),
+        preview_status: previewStatus
+      });
+    });
+
+    const values = Object.values(roleState);
+    const bundle_ready_count = values.filter((item) => item.ready).length;
+    const bundle_preview_ready_count = values.filter((item) => item.preview_ready).length;
+    const bundle_deployed_count = values.filter((item) => item.deployed).length;
+
+    return {
+      ok: values.length === 3,
+      bundle_id: String(bundleId || '').trim(),
+      site_id: activeSiteKey(),
+      required_count: 3,
+      present_count: values.filter((item) => item.present).length,
+      bundle_ready_count,
+      bundle_preview_ready_count,
+      bundle_deployed_count,
+      ready_task_ids: values.filter((item) => item.ready && item.task_id).map((item) => item.task_id),
+      preview_task_ids: values.filter((item) => item.preview_ready && item.task_id).map((item) => item.task_id),
+      roles: roleState
+    };
+  }
+
+  function syncMedGenProductBundleStatus() {
+    const bundle = medGenProductBundlePayloads();
+    const status = medGenProductBundleStatus(bundle.bundle_id);
+    const target = document.querySelector('[data-medgen-product-bundle-progress]');
+
+    if (target) {
+      Object.values(status.roles).forEach((roleStatus) => {
+        const row = target.querySelector('[data-medgen-product-bundle-role="' + roleStatus.role + '"]');
+        const state = roleStatus.deployed
+          ? 'deployed'
+          : roleStatus.preview_ready
+            ? 'preview'
+            : roleStatus.ready
+              ? 'ready'
+              : roleStatus.present
+                ? 'running'
+                : 'pending';
+
+        if (!row) {
+          return;
+        }
+
+        row.setAttribute('data-state', state);
+        const value = row.querySelector('span');
+        if (value) {
+          value.textContent = roleStatus.ready ? '1/1 · preview ' + (roleStatus.preview_ready ? 'ready' : 'нет') : (roleStatus.present ? '0/1 · ' + (roleStatus.status || 'queued') : '0/1');
+        }
+      });
+    }
+
+    if (status.present_count > 0) {
+      setMedGenProductBundleStatus(
+        'Связка: задач ' + status.present_count + '/3, ready ' + status.bundle_ready_count + '/3, preview ' + status.bundle_preview_ready_count + '/3.'
+      );
+    }
+
+    return status;
+  }
+
+  function medGenProductBundlePayloads() {
+    const profile = activeSiteProfile();
+    const siteId = activeSiteKey();
+    const site = medGenProductBundleSite();
+    const locale = medGenLocaleForActiveSite();
+    const productName = medGenBundleField('[data-medgen-bundle-product-field="name"]', '#admin-medgen-product-name');
+    const productBrand = medGenBundleField('[data-medgen-bundle-product-field="brand"]', '#admin-medgen-product-brand');
+    const productPrice = medGenBundleField('[data-medgen-bundle-product-field="price"]', '');
+    const sellerUrl = medGenBundleField('[data-medgen-bundle-product-field="seller_url"]', '');
+    const productImage = medGenBundleField('[data-medgen-bundle-product-field="image"]', '');
+    const productSlug = normalizeSlug(medGenBundleField('[data-medgen-bundle-product-field="slug"]', '') || productName);
+    const expertName = medGenBundleField('[data-medgen-bundle-author-field="name"]', '#admin-medgen-author-name') || 'Editorial reviewer';
+    const expertRole = medGenBundleField('[data-medgen-bundle-author-field="role"]', '#admin-medgen-author-role') || 'medical reviewer';
+    const expertBackground = medGenBundleField('[data-medgen-bundle-author-field="background"]', '#admin-medgen-author-background') || 'Reviewer profile for the product content bundle.';
+    const expertSlug = normalizeSlug(expertName);
+    const reviewTitle = medGenBundleField('[data-medgen-bundle-review-field="title"]', '') || (productName ? productName + ' review' : '');
+    const reviewSlug = normalizeSlug(productSlug ? productSlug + '-review' : reviewTitle);
+    const notes = medGenBundleField('[data-medgen-bundle-field="notes"]', '#admin-medgen-notes');
+    const productRoute = productSlug ? '/bady/' + productSlug + '/' : '';
+    const reviewRoute = reviewSlug ? '/obzory/' + reviewSlug + '/' : '';
+    const expertRoute = expertSlug ? '/experts/' + expertSlug + '/' : '';
+    const bundleId = 'cmx-product-bundle-' + (siteId || 'site') + '-' + (productSlug || 'product');
+    const issues = [];
+
+    if (!profile || !siteId) {
+      issues.push('active_site_required');
+    }
+    if (!site.domain) {
+      issues.push('site_domain_required');
+    }
+    if (!productName) {
+      issues.push('product_name_required');
+    }
+    if (!productSlug) {
+      issues.push('product_slug_required');
+    }
+    if (!reviewTitle) {
+      issues.push('review_title_required');
+    }
+    if (!expertName) {
+      issues.push('expert_name_required');
+    }
+
+    const product = {
+      name: productName,
+      brand: productBrand
+    };
+    if (sellerUrl) {
+      product.official_urls = [sellerUrl];
+    }
+
+    const productInput = {
+      price: productPrice,
+      seller_url: sellerUrl,
+      image: productImage
+    };
+    const sharedExtra = {
+      cmx_bundle_type: 'cmx_product_bundle',
+      bundle_id: bundleId,
+      completion_rule: 'complete_only_after_product_expert_review_preview_approval',
+      same_reviewer_required: true,
+      required_pages: ['product_card', 'expert_profile', 'product_review'],
+      product_route: productRoute,
+      review_route: reviewRoute,
+      reviewer_route: expertRoute,
+      cmx_output_contract: {
+        contract_url: 'https://cmx-medgen-contract.pages.dev/contract.md',
+        registry_url: 'https://cmx-medgen-contract.pages.dev/page-format-registry.json'
+      }
+    };
+    const baseNotes = [
+      notes,
+      'CMX product content bundle: generate only the requested page skeleton part and keep product, expert, and review linked by routes.'
+    ].filter(Boolean).join('\n\n');
+
+    const wrappers = [
+      {
+        role: 'product_card',
+        label: 'Product card',
+        payload: {
+          type: 'content_page',
+          page_title: productName,
+          locale,
+          site,
+          product,
+          target: {
+            slug: productSlug,
+            route: productRoute,
+            content_path: 'content/pages/supplements/' + productSlug + '.json'
+          },
+          notes: baseNotes,
+          extra: Object.assign({}, sharedExtra, {
+            cmx_content_type: 'product_card',
+            bundle_role: 'product_card',
+            cmx_product_input: productInput
+          })
+        },
+        publish: true
+      },
+      {
+        role: 'expert_profile',
+        label: 'Expert profile',
+        payload: {
+          type: 'author',
+          page_title: expertName,
+          locale,
+          site,
+          author: {
+            name: expertName,
+            role: expertRole,
+            background: expertBackground
+          },
+          target: {
+            slug: expertSlug,
+            route: expertRoute,
+            content_path: 'content/pages/authors/' + expertSlug + '.json'
+          },
+          notes: baseNotes,
+          extra: Object.assign({}, sharedExtra, {
+            cmx_content_type: 'expert_profile',
+            bundle_role: 'expert_profile'
+          })
+        },
+        publish: true
+      },
+      {
+        role: 'product_review',
+        label: 'Product review',
+        payload: {
+          type: 'content_page',
+          page_title: reviewTitle,
+          locale,
+          site,
+          product,
+          author: {
+            name: expertName,
+            role: expertRole,
+            background: expertBackground
+          },
+          target: {
+            slug: reviewSlug,
+            route: reviewRoute,
+            content_path: 'content/pages/technical/' + reviewSlug + '.json'
+          },
+          notes: baseNotes,
+          extra: Object.assign({}, sharedExtra, {
+            cmx_content_type: 'product_review',
+            bundle_role: 'product_review'
+          })
+        },
+        publish: true
+      }
+    ];
+
+    return {
+      ok: issues.length === 0,
+      action: 'medgen_product_bundle_prepare',
+      site_id: siteId,
+      bundle_id: bundleId,
+      locale,
+      routes: {
+        product: productRoute,
+        expert: expertRoute,
+        review: reviewRoute
+      },
+      completion_rule: 'complete_only_after_product_expert_review_preview_approval',
+      issues,
+      tasks: wrappers
+    };
+  }
+
+  async function previewCurrentMedGenProductBundle() {
+    if (!isGithubMode()) {
+      const result = { ok: false, issues: ['github_pages_admin_required'] };
+
+      setMedGenProductBundleStatus('Preview связки доступен только в CMS-admin_v2 на GitHub Pages.');
+      setMedGenProductBundleOutput(result);
+      return result;
+    }
+
+    if (!requireActiveSiteContext(setMedGenProductBundleStatus, setMedGenProductBundleOutput)) {
+      return siteContextError();
+    }
+
+    const bundle = medGenProductBundlePayloads();
+    const status = syncMedGenProductBundleStatus();
+
+    if (status.bundle_ready_count !== 3) {
+      const result = Object.assign({}, status, {
+        ok: false,
+        action: 'medgen_product_bundle_preview',
+        issues: ['bundle_requires_3_succeeded_tasks_before_preview']
+      });
+
+      setMedGenProductBundleOutput(result);
+      setMedGenProductBundleStatus('Preview связки остановлен: нужно 3/3 succeeded задач.');
+      return result;
+    }
+
+    const siteId = activeSiteKey();
+    const previewResults = [];
+    setStatusBusy('admin-medgen-product-bundle-status', true);
+    setMedGenProductBundleStatus('Собираю preview для 3 страниц товарной связки...');
+
+    try {
+      for (const taskId of status.ready_task_ids) {
+        previewResults.push(Object.assign({ task_id: taskId }, await cloudflareCreateMedGenPreview(siteId, taskId)));
+      }
+
+      const ok = previewResults.length === 3 && previewResults.every((result) => result && result.ok);
+      const firstPreviewUrl = previewResults.map(medgenPreviewResultUrl).find(Boolean) || '';
+      const result = {
+        ok,
+        action: 'medgen_product_bundle_preview',
+        site_id: siteId,
+        bundle_id: bundle.bundle_id,
+        task_ids: status.ready_task_ids,
+        preview_results: previewResults,
+        first_preview_url: firstPreviewUrl
+      };
+
+      setMedGenProductBundleOutput(result);
+      setMedGenOutput(result);
+      setMedGenProductBundleStatus(ok
+        ? 'Preview связки собран: 3/3 страницы готовы к approval.'
+        : 'Preview связки собран не полностью. Проверьте JSON ответа.');
+      await refreshRuntimeContentIndexForActiveSite({ silent: true, force: true });
+      await refreshReleaseStatusForActiveSite({ silent: true });
+      await refreshMedGenTaskIndexForActiveSite({ force: true });
+
+      if (firstPreviewUrl) {
+        openPreviewUrl(firstPreviewUrl, null);
+      }
+
+      return result;
+    } finally {
+      setStatusBusy('admin-medgen-product-bundle-status', false);
+    }
+  }
+
+  async function deployCurrentMedGenProductBundlePreview() {
+    if (!isGithubMode()) {
+      const result = { ok: false, issues: ['github_pages_admin_required'] };
+
+      setMedGenProductBundleStatus('Deploy связки доступен только в CMS-admin_v2 на GitHub Pages.');
+      setMedGenProductBundleOutput(result);
+      return result;
+    }
+
+    if (!requireActiveSiteContext(setMedGenProductBundleStatus, setMedGenProductBundleOutput)) {
+      return siteContextError();
+    }
+
+    const bundle = medGenProductBundlePayloads();
+    const status = syncMedGenProductBundleStatus();
+
+    if (status.bundle_ready_count !== 3) {
+      const result = Object.assign({}, status, {
+        ok: false,
+        action: 'medgen_product_bundle_deploy',
+        issues: ['bundle_requires_3_succeeded_tasks_before_deploy']
+      });
+
+      setMedGenProductBundleOutput(result);
+      setMedGenProductBundleStatus('Deploy связки остановлен: нужно 3/3 succeeded задач.');
+      return result;
+    }
+
+    if (!window.confirm('Подтвердить approval и отправить deploy всей товарной связки: товар, эксперт, обзор?')) {
+      setMedGenProductBundleStatus('Deploy товарной связки отменен.');
+      return Object.assign({}, status, { ok: false, cancelled: true });
+    }
+
+    setStatusBusy('admin-medgen-product-bundle-status', true);
+    setMedGenProductBundleStatus('Подтверждаю preview и деплою товарную связку...');
+
+    try {
+      const result = await deployMedGenPreviewTasks(activeSiteKey(), status.ready_task_ids, 'medgen_product_bundle_deploy', {
+        ssh_mirror_requested: false
+      });
+      const combined = Object.assign({}, result || {}, {
+        bundle_id: bundle.bundle_id,
+        bundle_status_before_deploy: status
+      });
+
+      setMedGenProductBundleOutput(combined);
+      setMedGenOutput(combined);
+      setMedGenProductBundleStatus(combined && combined.ok
+        ? 'Товарная связка прошла approval и отправлена в Cloudflare Pages deploy.'
+        : 'Deploy товарной связки не завершен. Проверьте JSON и release status.');
+      await refreshRuntimeContentIndexForActiveSite({ silent: true, force: true });
+      await refreshReleaseStatusForActiveSite({ silent: true });
+      await refreshMedGenTaskIndexForActiveSite({ force: true });
+
+      return combined;
+    } finally {
+      setStatusBusy('admin-medgen-product-bundle-status', false);
+    }
+  }
+
+  async function runMedGenProductBundle(dryRun) {
+    if (!isGithubMode()) {
+      const result = { ok: false, issues: ['github_pages_admin_required'] };
+
+      setMedGenProductBundleStatus('Товарная связка доступна только в CMS-admin_v2 на GitHub Pages.');
+      setMedGenProductBundleOutput(result);
+      return result;
+    }
+
+    if (!requireActiveSiteContext(setMedGenProductBundleStatus, setMedGenProductBundleOutput)) {
+      return siteContextError();
+    }
+
+    const bundle = medGenProductBundlePayloads();
+
+    if (dryRun || !bundle.ok) {
+      setMedGenProductBundleOutput(bundle);
+      setMedGenProductBundleStatus(bundle.ok
+        ? 'Связка валидна: будут созданы 3 MedGen задачи без GitHub Actions.'
+        : 'Связка требует правки: ' + bundle.issues.join('; '));
+      return bundle;
+    }
+
+    if (!cloudflareRuntimeForActiveSite()) {
+      const result = Object.assign({}, bundle, {
+        ok: false,
+        issues: ['cloudflare_runtime_required_for_product_bundle']
+      });
+
+      setMedGenProductBundleOutput(result);
+      setMedGenProductBundleStatus('Товарная связка остановлена: нужен Cloudflare runtime, чтобы не тратить GitHub Actions.');
+      return result;
+    }
+
+    if (!window.confirm('Создать 3 MedGen задачи для товарной связки: товар, эксперт и обзор? GitHub Actions не будут запускаться.')) {
+      setMedGenProductBundleStatus('Создание товарной связки отменено.');
+      return Object.assign({}, bundle, { ok: false, cancelled: true });
+    }
+
+    setMedGenProductBundleStatus('Создаю MedGen задачи товарной связки...');
+    setMedGenStatus('Создаю MedGen product bundle через Worker...');
+    setStatusBusy('admin-medgen-product-bundle-status', true);
+    setStatusBusy('admin-medgen-status', true);
+    updateMedGenStageWidget({
+      state: 'running',
+      summary: 'Product bundle',
+      detail: 'Создаются 3 связанные задачи: product card, expert profile, product review.'
+    });
+
+    const results = [];
+    let stopped = false;
+
+    try {
+      for (const wrapper of bundle.tasks) {
+        if (stopped) {
+          continue;
+        }
+
+        const runtime = await cloudflareCreateMedGenTask(bundle.site_id, wrapper);
+        let github = null;
+
+        if (runtime && runtime.ok && runtime.task) {
+          github = await githubBackupMedGenTask(bundle.site_id, runtime.task, wrapper);
+        } else {
+          stopped = true;
+        }
+
+        results.push({
+          role: wrapper.role,
+          ok: Boolean(runtime && runtime.ok),
+          runtime,
+          github
+        });
+      }
+
+      const ok = results.length === 3 && results.every((item) => item.ok);
+      const createdTasks = results
+        .map((item) => item.runtime && item.runtime.task ? medgenTaskRecordFromRuntime(item.runtime.task) : null)
+        .filter(Boolean);
+
+      if (createdTasks.length > 0) {
+        adminState.medgenTaskIndexBySite[bundle.site_id] = {
+          loaded_at: new Date().toISOString(),
+          tasks: createdTasks
+        };
+      }
+
+      const combined = Object.assign({}, bundle, {
+        ok,
+        action: 'medgen_product_bundle_create',
+        created_task_count: createdTasks.length,
+        results,
+        warnings: ['Карточка товара не считается complete до succeeded + preview + approval всех трех задач.']
+      });
+
+      setMedGenProductBundleOutput(combined);
+      setMedGenOutput(combined);
+      setMedGenProductBundleStatus(ok
+        ? 'Созданы 3 MedGen задачи. Дождитесь succeeded, затем соберите preview и approval.'
+        : 'Создание связки остановлено: часть задач не создана.');
+      setMedGenStatus(ok ? 'MedGen product bundle создан через Worker.' : 'MedGen product bundle создан частично или с ошибкой.');
+      syncMedGenProductBundleStatus();
+      updateMedGenStageWidget({
+        state: ok ? 'running' : 'error',
+        summary: ok ? '3 задачи созданы' : 'Bundle ошибка',
+        detail: ok ? 'Следующий шаг: poll task_id, preview, approval.' : 'Проверьте Product bundle JSON.'
+      });
+      window.setTimeout(() => refreshMedGenTaskIndexForActiveSite({ force: true }), 8000);
+
+      return combined;
+    } finally {
+      setStatusBusy('admin-medgen-product-bundle-status', false);
+      setStatusBusy('admin-medgen-status', false);
+    }
   }
 
   async function runMedGenWorkflow(dryRun, mode) {
@@ -8926,6 +9572,23 @@
         setStatusBusy('admin-medgen-status', false);
       }
 
+      return;
+    }
+
+    if (hostingProvider(activeSiteProfile()) === 'cloudflare_pages') {
+      const result = {
+        ok: false,
+        issues: ['cloudflare_runtime_required_for_medgen'],
+        human: 'Для Cloudflare Pages сайтов MedGen create/poll работает только через Worker/D1/R2. Legacy medgen-content.yml отключен, чтобы не расходовать GitHub Actions.'
+      };
+
+      setMedGenOutput(result);
+      setMedGenStatus('MedGen workflow fallback отключен для Cloudflare Pages. Проверьте Worker/runtime подключение.');
+      updateMedGenStageWidget({
+        state: 'error',
+        summary: 'Worker runtime недоступен',
+        detail: result.human
+      });
       return;
     }
 
@@ -10811,7 +11474,7 @@
 
       let deployResult = null;
 
-      if (deployAfter) {
+      if (deployAfter && hostingProvider(activeSiteProfile()) === 'static_vps') {
         deployResult = await githubDispatchWorkflow(config.deploy_workflow_id || 'deploy.yml', {
           target: 'production'
         }, config.deploy_actions_url || '');
@@ -10830,7 +11493,9 @@
           deploy: deployResult
         },
         written_paths: [relativePath],
-        warnings: deployAfter ? ['Media uploaded to GitHub; static deploy workflow was requested.'] : []
+        warnings: deployAfter && hostingProvider(activeSiteProfile()) === 'static_vps'
+          ? ['Media uploaded to GitHub; static VPS deploy workflow was requested.']
+          : (deployAfter ? ['Media uploaded to GitHub. Cloudflare Pages release must be built by the Ubuntu builder; deploy.yml was not dispatched.'] : [])
       };
     } catch (error) {
       return {
@@ -11688,40 +12353,34 @@
       build_profile: cloudflareBuildProfile(profile, siteId),
       environment: deploy.environment || 'production'
     });
-    const pagesDeploy = runtimeRelease && runtimeRelease.ok && runtimeRelease.status !== 'no_changes'
-      ? await cloudflareRequestPagesDeployment(siteId, {
-        request_id: 'pages-deploy-' + Date.now(),
-        pages_project: cloudflare.pages_project || '',
-        branch: cloudflare.branch || '',
-        source: 'admin_publish_action',
-        runtime_release_request_id: runtimeRelease.request_id || ''
-      })
-      : {
-        ok: true,
-        skipped: true,
-        status: 'no_runtime_release_to_deploy'
-      };
-    const deployOk = runtimeRelease.ok === true && pagesDeploy.ok === true;
-    const deployStatus = pagesDeploy.skipped
+    const builderCommand = 'php bin/cms release:cloudflare --site-id=' + siteId + ' --target=' + (deploy.environment || 'production');
+    const deployOk = runtimeRelease.ok === true;
+    const deployStatus = runtimeRelease.status === 'no_changes'
       ? 'runtime_release_no_changes'
-      : (deployOk ? 'cloudflare_pages_deploy_requested' : 'publish_accepted_cloudflare_deploy_failed');
+      : (deployOk ? 'runtime_release_prepared_builder_required' : 'publish_accepted_runtime_release_failed');
 
     const result = Object.assign({}, published, {
       ok: deployOk,
       status: deployStatus,
       pages_deploy: {
-        ok: Boolean(pagesDeploy.ok),
-        skipped: Boolean(pagesDeploy.skipped),
-        status: pagesDeploy.status || '',
-        deployment_id: pagesDeploy.deployment_id || '',
-        deployment_url: pagesDeploy.deployment_url || '',
-        reason: pagesDeploy.skipped ? 'No runtime release was available to deploy.' : ''
+        ok: false,
+        skipped: true,
+        status: 'builder_release_required',
+        deployment_id: '',
+        deployment_url: '',
+        builder_command: builderCommand,
+        reason: 'Run the Ubuntu builder release command and approve the payload_sha256 before upload.'
       },
       release_status: releaseStatus,
       runtime_release: runtimeRelease,
+      builder_release: {
+        required: true,
+        command: builderCommand,
+        approval: 'Run once for preview, then rerun with --approve-payload-sha256=<payload_sha256>.'
+      },
       warnings: deployOk
-        ? ['Cloudflare runtime подготовил release и запросил Cloudflare Pages deployment без GitHub Actions.']
-        : ['Cloudflare runtime принял release, но Cloudflare Pages deployment не был запрошен. GitHub Actions не запускались.']
+        ? ['Cloudflare runtime подготовил release. Следующий шаг: Ubuntu builder command для сборки, preview hash и Worker Direct Upload без GitHub Actions.']
+        : ['Cloudflare runtime принял publish, но runtime release не подготовлен. GitHub Actions не запускались.']
     });
 
     refreshReleaseStatusForActiveSite({ silent: true });
@@ -13517,6 +14176,10 @@
     const dryRun = panel.querySelector('[data-medgen-dry-run]');
     const run = panel.querySelector('[data-medgen-run]');
     const poll = panel.querySelector('[data-medgen-poll]');
+    const bundleDryRun = panel.querySelector('[data-medgen-product-bundle-dry-run]');
+    const bundleRun = panel.querySelector('[data-medgen-product-bundle-run]');
+    const bundlePreview = panel.querySelector('[data-medgen-product-bundle-preview]');
+    const bundleDeploy = panel.querySelector('[data-medgen-product-bundle-deploy]');
 
     if (dryRun) {
       dryRun.addEventListener('click', () => runMedGenWorkflow(true, 'create_task'));
@@ -13529,6 +14192,24 @@
     if (poll) {
       poll.addEventListener('click', () => runMedGenWorkflow(false, 'poll_task'));
     }
+
+    if (bundleDryRun) {
+      bundleDryRun.addEventListener('click', () => runMedGenProductBundle(true));
+    }
+
+    if (bundleRun) {
+      bundleRun.addEventListener('click', () => runMedGenProductBundle(false));
+    }
+
+    if (bundlePreview) {
+      bundlePreview.addEventListener('click', previewCurrentMedGenProductBundle);
+    }
+
+    if (bundleDeploy) {
+      bundleDeploy.addEventListener('click', deployCurrentMedGenProductBundlePreview);
+    }
+
+    syncMedGenProductBundleStatus();
   }
 
   function resetDraftActionState() {
