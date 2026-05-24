@@ -20,6 +20,8 @@
     contentBaselineApprovalsBySite: {},
     directUploadBundlesBySite: {},
     directUploadApprovalsBySite: {},
+    builderRuntime: null,
+    builderRuntimeSha: '',
     medgenStatusBySite: {},
     medgenTaskIndexBySite: {},
     medgenTaskRefreshAtBySite: {},
@@ -964,6 +966,20 @@
     return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/pages-deployments');
   }
 
+  async function cloudflareCreateBuilderJob(siteId, payload) {
+    return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/builder-jobs', {
+      method: 'POST',
+      body: JSON.stringify(Object.assign({}, payload || {}, { site_id: siteId }))
+    });
+  }
+
+  async function cloudflareApproveBuilderJob(requestId, payload) {
+    return cloudflareApiRequest('/api/builder/jobs/' + encodeURIComponent(requestId) + '/approve', {
+      method: 'POST',
+      body: JSON.stringify(payload || {})
+    });
+  }
+
   async function cloudflareRuntimeContentIndex(siteId) {
     return cloudflareApiRequest('/api/sites/' + encodeURIComponent(siteId) + '/content-index');
   }
@@ -1887,6 +1903,421 @@
       cloudflare_account_id: 'CLOUDFLARE_ACCOUNT_ID',
       cloudflare_api_token: 'CLOUDFLARE_API_TOKEN'
     };
+  }
+
+  function defaultBuilderSecretRefs() {
+    return {
+      host: 'BUILDER_HOST',
+      port: 'BUILDER_PORT',
+      user: 'BUILDER_USER',
+      path: 'BUILDER_PATH',
+      ssh_private_key: 'BUILDER_SSH_KEY',
+      api_base: 'CMX_CLOUDFLARE_API_BASE',
+      agent_api_key: 'CMX_AGENT_API_KEY'
+    };
+  }
+
+  function defaultBuilderRuntimeConfig() {
+    return {
+      version: 'cmx-builder-runtime-v1',
+      mode: 'server',
+      environment: 'cmx-builder',
+      worker_id: 'cmx-builder-1',
+      repo_path: '/opt/cmx/current',
+      local_command: 'php bin/cms builder:work --once --worker-id=local-mac',
+      server: {
+        secret_refs: defaultBuilderSecretRefs()
+      }
+    };
+  }
+
+  function builderRuntimeElements() {
+    return {
+      panel: document.querySelector('[data-builder-runtime-panel]'),
+      serverToggle: document.querySelector('[data-builder-runtime-server-toggle]'),
+      serverFields: document.querySelector('[data-builder-runtime-server-fields]'),
+      status: document.querySelector('[data-builder-runtime-status]'),
+      save: document.querySelector('[data-builder-runtime-save]'),
+      check: document.querySelector('[data-builder-runtime-check-secrets]'),
+      clear: document.querySelector('[data-builder-runtime-clear-secret-values]')
+    };
+  }
+
+  function setBuilderRuntimeStatus(message) {
+    const status = builderRuntimeElements().status;
+
+    if (status) {
+      status.value = String(message || '');
+      status.textContent = String(message || '');
+    }
+  }
+
+  function builderRuntimeSecretRefsFromForm() {
+    const refs = defaultBuilderSecretRefs();
+
+    document.querySelectorAll('[data-builder-secret-ref]').forEach((field) => {
+      if (!(field instanceof HTMLInputElement)) {
+        return;
+      }
+
+      const key = field.getAttribute('data-builder-secret-ref') || '';
+      const value = String(field.value || '').trim();
+
+      if (key && value) {
+        refs[key] = value;
+      }
+    });
+
+    return refs;
+  }
+
+  function builderRuntimeConfigFromForm() {
+    const defaults = defaultBuilderRuntimeConfig();
+    const elements = builderRuntimeElements();
+    const mode = elements.serverToggle instanceof HTMLInputElement && elements.serverToggle.checked ? 'server' : 'local_mac';
+    const valueFor = (key, fallback) => {
+      const field = document.querySelector('[data-builder-runtime-field="' + key + '"]');
+
+      return field instanceof HTMLInputElement && String(field.value || '').trim()
+        ? String(field.value || '').trim()
+        : fallback;
+    };
+
+    return {
+      version: defaults.version,
+      mode,
+      environment: valueFor('environment', defaults.environment),
+      worker_id: valueFor('worker_id', mode === 'local_mac' ? 'local-mac' : defaults.worker_id),
+      repo_path: valueFor('repo_path', defaults.repo_path),
+      local_command: valueFor('local_command', defaults.local_command),
+      server: {
+        secret_refs: builderRuntimeSecretRefsFromForm()
+      },
+      updated_at: new Date().toISOString()
+    };
+  }
+
+  function populateBuilderRuntimeForm(config) {
+    const defaults = defaultBuilderRuntimeConfig();
+    const current = Object.assign({}, defaults, config && typeof config === 'object' ? config : {});
+    const server = current.server && typeof current.server === 'object' ? current.server : {};
+    const refs = Object.assign({}, defaultBuilderSecretRefs(), server.secret_refs && typeof server.secret_refs === 'object' ? server.secret_refs : {});
+    const elements = builderRuntimeElements();
+
+    if (elements.serverToggle instanceof HTMLInputElement) {
+      elements.serverToggle.checked = current.mode !== 'local_mac';
+    }
+
+    Object.entries({
+      environment: current.environment || defaults.environment,
+      worker_id: current.worker_id || defaults.worker_id,
+      repo_path: current.repo_path || defaults.repo_path,
+      local_command: current.local_command || defaults.local_command
+    }).forEach(([key, value]) => {
+      const field = document.querySelector('[data-builder-runtime-field="' + key + '"]');
+
+      if (field instanceof HTMLInputElement) {
+        field.value = String(value || '');
+      }
+    });
+
+    Object.entries(refs).forEach(([key, value]) => {
+      const field = document.querySelector('[data-builder-secret-ref="' + key + '"]');
+
+      if (field instanceof HTMLInputElement) {
+        field.value = String(value || '');
+      }
+    });
+
+    syncBuilderRuntimeModeFields();
+  }
+
+  function syncBuilderRuntimeModeFields() {
+    const elements = builderRuntimeElements();
+    const serverMode = elements.serverToggle instanceof HTMLInputElement && elements.serverToggle.checked;
+
+    if (elements.serverFields) {
+      elements.serverFields.hidden = !serverMode;
+    }
+  }
+
+  function builderRuntimeSecretValues(config) {
+    const runtime = config && typeof config === 'object' ? config : builderRuntimeConfigFromForm();
+    const server = runtime.server && typeof runtime.server === 'object' ? runtime.server : {};
+    const refs = Object.assign({}, defaultBuilderSecretRefs(), server.secret_refs && typeof server.secret_refs === 'object' ? server.secret_refs : {});
+    const collected = {};
+
+    document.querySelectorAll('[data-builder-secret-value]').forEach((field) => {
+      if (!(field instanceof HTMLInputElement) && !(field instanceof HTMLTextAreaElement)) {
+        return;
+      }
+
+      const key = field.getAttribute('data-builder-secret-value') || '';
+      const secretName = refs[key] || '';
+      const raw = field.value;
+      const trimmed = String(raw || '').trim();
+
+      if (secretName && trimmed) {
+        collected[String(secretName).trim()] = key === 'ssh_private_key' ? raw : trimmed;
+      }
+    });
+
+    const hasSshValue = ['host', 'user', 'path', 'ssh_private_key'].some((key) => {
+      const secretName = refs[key] || '';
+      return secretName && Object.prototype.hasOwnProperty.call(collected, secretName);
+    });
+
+    if (hasSshValue && refs.port && !Object.prototype.hasOwnProperty.call(collected, refs.port)) {
+      collected[refs.port] = '22';
+    }
+
+    return collected;
+  }
+
+  function clearBuilderRuntimeSecretValues(secretNames) {
+    const names = new Set((secretNames || []).map((name) => String(name || '').trim()).filter(Boolean));
+    const runtime = builderRuntimeConfigFromForm();
+    const server = runtime.server && typeof runtime.server === 'object' ? runtime.server : {};
+    const refs = Object.assign({}, defaultBuilderSecretRefs(), server.secret_refs && typeof server.secret_refs === 'object' ? server.secret_refs : {});
+
+    document.querySelectorAll('[data-builder-secret-value]').forEach((field) => {
+      if (!(field instanceof HTMLInputElement) && !(field instanceof HTMLTextAreaElement)) {
+        return;
+      }
+
+      const key = field.getAttribute('data-builder-secret-value') || '';
+      const secretName = refs[key] || '';
+
+      if (!names.size || names.has(secretName)) {
+        field.value = '';
+      }
+    });
+  }
+
+  function builderRuntimeExpectedSecretNames(config) {
+    const runtime = config && typeof config === 'object' ? config : builderRuntimeConfigFromForm();
+    const server = runtime.server && typeof runtime.server === 'object' ? runtime.server : {};
+    const refs = Object.assign({}, defaultBuilderSecretRefs(), server.secret_refs && typeof server.secret_refs === 'object' ? server.secret_refs : {});
+    const keys = runtime.mode === 'local_mac'
+      ? []
+      : ['host', 'port', 'user', 'path', 'ssh_private_key', 'api_base', 'agent_api_key'];
+
+    return uniqueNonEmpty(keys.map((key) => refs[key]));
+  }
+
+  async function saveBuilderRuntimeSecrets(config) {
+    const runtime = config && typeof config === 'object' ? config : builderRuntimeConfigFromForm();
+    const environment = String(runtime.environment || '').trim();
+    const values = builderRuntimeSecretValues(runtime);
+    const names = Object.keys(values).filter(Boolean);
+
+    if (!names.length) {
+      return { ok: true, skipped: true, written_names: [] };
+    }
+
+    if (!githubToken()) {
+      return { ok: false, issues: ['github_token_required'] };
+    }
+
+    if (!environment) {
+      return { ok: false, issues: ['github_environment_required'] };
+    }
+
+    setBuilderRuntimeStatus('Создаю GitHub Environment ' + environment + '...');
+    const ensured = await githubEnsureEnvironment(environment);
+
+    if (!ensured.ok) {
+      return ensured;
+    }
+
+    setBuilderRuntimeStatus('Получаю public key GitHub Environment...');
+    const publicKey = await githubEnvironmentPublicKey(environment);
+
+    if (!publicKey.ok) {
+      return publicKey;
+    }
+
+    const written = [];
+    const issues = [];
+
+    for (const name of names) {
+      setBuilderRuntimeStatus('Шифрую и сохраняю builder secret ' + name + '...');
+
+      try {
+        const encrypted = await encryptGithubEnvironmentSecret(values[name], publicKey.key);
+        const result = await githubPutEnvironmentSecret(environment, name, encrypted, publicKey.key_id);
+
+        if (result.ok) {
+          written.push(name);
+        } else {
+          issues.push(...(result.issues || ['secret_save_failed: ' + name]));
+        }
+      } catch (error) {
+        issues.push('secret_save_failed: ' + name + ': ' + (error && error.message ? error.message : 'encryption error'));
+      }
+    }
+
+    if (written.length) {
+      clearBuilderRuntimeSecretValues(written);
+    }
+
+    return {
+      ok: issues.length === 0,
+      action: 'builder_runtime_environment_secrets_save',
+      environment,
+      written_names: written,
+      issues
+    };
+  }
+
+  async function checkBuilderRuntimeSecrets() {
+    const runtime = builderRuntimeConfigFromForm();
+    const environment = String(runtime.environment || '').trim();
+
+    if (!environment) {
+      setBuilderRuntimeStatus('Укажите GitHub Environment builder.');
+      return { ok: false, issues: ['github_environment_required'] };
+    }
+
+    setBuilderRuntimeStatus('Проверяю builder secrets в GitHub Environment ' + environment + '...');
+    const result = await githubListEnvironmentSecretNames(environment);
+
+    if (!result.ok) {
+      setBuilderRuntimeStatus('Builder secrets не проверены: ' + (result.issues || ['unknown error']).join('; '));
+      return result;
+    }
+
+    const available = new Set((result.names || []).map((name) => String(name || '').trim()).filter(Boolean));
+    const expected = builderRuntimeExpectedSecretNames(runtime);
+    const missing = expected.filter((name) => !available.has(name));
+    const ok = missing.length === 0;
+
+    setBuilderRuntimeStatus(ok
+      ? 'Builder Environment готов: ' + expected.join(', ')
+      : 'Builder Environment требует secrets: ' + missing.join(', '));
+
+    return {
+      ok,
+      environment,
+      expected_names: expected,
+      missing_names: missing,
+      available_names: result.names || []
+    };
+  }
+
+  async function loadBuilderRuntimeConfig(options) {
+    const opts = options || {};
+
+    if (!isGithubMode() || !githubToken()) {
+      adminState.builderRuntime = defaultBuilderRuntimeConfig();
+      adminState.builderRuntimeSha = '';
+      populateBuilderRuntimeForm(adminState.builderRuntime);
+      if (!opts.silent) {
+        setBuilderRuntimeStatus('Builder runtime использует настройки по умолчанию.');
+      }
+      return adminState.builderRuntime;
+    }
+
+    const result = await githubReadTextFile('config/builder-runtime.json');
+
+    if (!result.ok) {
+      adminState.builderRuntime = defaultBuilderRuntimeConfig();
+      adminState.builderRuntimeSha = '';
+      populateBuilderRuntimeForm(adminState.builderRuntime);
+      if (!opts.silent) {
+        setBuilderRuntimeStatus('Builder runtime config не найден; используются значения по умолчанию.');
+      }
+      return adminState.builderRuntime;
+    }
+
+    try {
+      const parsed = JSON.parse(result.content || '{}');
+      adminState.builderRuntime = Object.assign({}, defaultBuilderRuntimeConfig(), parsed && typeof parsed === 'object' ? parsed : {});
+      adminState.builderRuntimeSha = result.sha || '';
+      populateBuilderRuntimeForm(adminState.builderRuntime);
+      if (!opts.silent) {
+        setBuilderRuntimeStatus('Builder runtime загружен из config/builder-runtime.json.');
+      }
+      return adminState.builderRuntime;
+    } catch (error) {
+      adminState.builderRuntime = defaultBuilderRuntimeConfig();
+      adminState.builderRuntimeSha = result.sha || '';
+      populateBuilderRuntimeForm(adminState.builderRuntime);
+      setBuilderRuntimeStatus('Builder runtime config не разобран; проверьте JSON.');
+      return adminState.builderRuntime;
+    }
+  }
+
+  async function saveBuilderRuntimeSettings() {
+    if (!isGithubMode()) {
+      setBuilderRuntimeStatus('Builder runtime сохраняется через GitHub Pages admin.');
+      return;
+    }
+
+    if (!githubToken()) {
+      setBuilderRuntimeStatus('GitHub token не подключен.');
+      return;
+    }
+
+    const runtime = builderRuntimeConfigFromForm();
+    const secretNames = Object.keys(builderRuntimeSecretValues(runtime));
+    const confirmation = secretNames.length
+      ? 'Сохранить builder config и записать ' + secretNames.length + ' encrypted secrets в GitHub Environment "' + runtime.environment + '"?'
+      : 'Сохранить builder config без обновления secrets?';
+
+    if (!window.confirm(confirmation)) {
+      setBuilderRuntimeStatus('Сохранение builder отменено.');
+      return;
+    }
+
+    setBuilderRuntimeStatus('Сохраняю builder runtime config...');
+
+    const secretsResult = await saveBuilderRuntimeSecrets(runtime);
+
+    if (!secretsResult.ok) {
+      setBuilderRuntimeStatus('Builder secrets не сохранены: ' + (secretsResult.issues || ['unknown error']).join('; '));
+      return;
+    }
+
+    const current = adminState.builderRuntimeSha ? { ok: true, sha: adminState.builderRuntimeSha } : await githubReadTextFile('config/builder-runtime.json');
+    const saved = await githubSaveJsonFile(
+      'config/builder-runtime.json',
+      runtime,
+      'Save builder runtime config',
+      current.ok ? current.sha : ''
+    );
+
+    if (!saved.ok) {
+      setBuilderRuntimeStatus('Builder config не сохранен: ' + ((saved.issues || saved.errors || ['unknown error']).map((item) => item && item.human ? item.human : String(item)).join('; ')));
+      return;
+    }
+
+    adminState.builderRuntime = runtime;
+    adminState.builderRuntimeSha = saved.data && saved.data.commit ? '' : adminState.builderRuntimeSha;
+    setBuilderRuntimeStatus(secretNames.length
+      ? 'Builder сохранен. Secrets записаны: ' + (secretsResult.written_names || []).join(', ') + '.'
+      : 'Builder config сохранен. Secrets не менялись.');
+  }
+
+  function builderRuntimeJobPayload(source) {
+    const runtime = builderRuntimeConfigFromForm();
+    const server = runtime.server && typeof runtime.server === 'object' ? runtime.server : {};
+
+    return {
+      mode: runtime.mode === 'local_mac' ? 'local_mac' : 'server',
+      environment: runtime.environment || 'cmx-builder',
+      worker_id: runtime.worker_id || (runtime.mode === 'local_mac' ? 'local-mac' : 'cmx-builder-1'),
+      repo_path: runtime.repo_path || '/opt/cmx/current',
+      local_command: runtime.local_command || 'php bin/cms builder:work --once --worker-id=local-mac',
+      server_secret_refs: Object.assign({}, defaultBuilderSecretRefs(), server.secret_refs && typeof server.secret_refs === 'object' ? server.secret_refs : {}),
+      source: String(source || 'admin_builder_release')
+    };
+  }
+
+  function builderRuntimeModeLabel(payload) {
+    const runtime = payload && typeof payload === 'object' ? payload : builderRuntimeJobPayload('label');
+
+    return runtime.mode === 'local_mac' ? 'локальный Mac builder' : 'SSH builder-сервер';
   }
 
   function sshMirrorToggleHtml(attributeName) {
@@ -5687,6 +6118,82 @@
       .replace(/_/g, ' ');
   }
 
+  function builderJobLabel(item) {
+    const payload = item && item.payload && typeof item.payload === 'object' ? item.payload : {};
+    const preview = item && item.preview_summary && typeof item.preview_summary === 'object' ? item.preview_summary : {};
+    const result = item && item.result && typeof item.result === 'object' ? item.result : {};
+    const deployment = result.deployment && typeof result.deployment === 'object' ? result.deployment : {};
+    const parts = [
+      payload.pages_project || item && item.site_id || 'site',
+      item && item.target ? item.target : 'production'
+    ];
+
+    if (preview.payload_sha256) {
+      parts.push('sha ' + String(preview.payload_sha256).slice(0, 12));
+    }
+
+    if (deployment.deployment_url) {
+      parts.push(String(deployment.deployment_url));
+    }
+
+    return parts.join(' · ');
+  }
+
+  function renderBuilderJobItem(item) {
+    const statusText = item && item.status ? String(item.status) : 'queued';
+    const requestId = item && item.request_id ? String(item.request_id) : '';
+    const preview = item && item.preview_summary && typeof item.preview_summary === 'object' ? item.preview_summary : {};
+    const payloadHash = String(preview.payload_sha256 || '');
+    const approveButton = requestId && statusText === 'preview_ready' && /^[a-f0-9]{64}$/.test(payloadHash)
+      ? ' <button type="button" class="admin-inline-button" data-builder-job-approve="' + escapeHtml(requestId) + '" data-builder-job-hash="' + escapeHtml(payloadHash) + '">Approve upload</button>'
+      : '';
+
+    return '<li><strong>builder: ' + escapeHtml(statusText) + '</strong><span>' + escapeHtml(builderJobLabel(item)) + approveButton + '</span></li>';
+  }
+
+  function bindBuilderJobApproveButtons() {
+    document.querySelectorAll('[data-builder-job-approve]').forEach((button) => {
+      if (!(button instanceof HTMLButtonElement) || button.dataset.builderJobApproveBound === 'true') {
+        return;
+      }
+
+      button.dataset.builderJobApproveBound = 'true';
+      button.addEventListener('click', async () => {
+        const requestId = button.getAttribute('data-builder-job-approve') || '';
+        const payloadHash = button.getAttribute('data-builder-job-hash') || '';
+
+        if (!requestId || !payloadHash) {
+          resetReleaseStatusView('Builder approval невозможен: нет request_id или payload sha256.', 'error');
+          return;
+        }
+
+        if (!window.confirm('Подтвердить upload bundle по payload sha256 ' + payloadHash.slice(0, 16) + '?')) {
+          return;
+        }
+
+        button.disabled = true;
+        button.textContent = 'Approving...';
+
+        const result = await cloudflareApproveBuilderJob(requestId, {
+          approved_payload_sha256: payloadHash
+        });
+
+        if (result && result.ok) {
+          resetReleaseStatusView('Builder job approved. Ubuntu builder выполнит upload без GitHub Actions.', 'prepared');
+        } else {
+          const issues = result && Array.isArray(result.issues)
+            ? result.issues.join('; ')
+            : result && Array.isArray(result.errors)
+              ? result.errors.join('; ')
+              : 'builder approve endpoint недоступен';
+          resetReleaseStatusView('Builder approval не выполнен: ' + issues, 'error');
+        }
+
+        await refreshReleaseStatusForActiveSite({ silent: true });
+      });
+    });
+  }
+
   function renderReleaseStatus(status) {
     const elements = releaseStatusElements();
 
@@ -5744,7 +6251,8 @@
     }
 
     if (elements.batches) {
-      elements.batches.innerHTML = renderReleaseItems(status.release_batches, 'Batch-релизов пока нет.', (item) => {
+      const builderHtml = renderReleaseItems(status.builder_jobs, 'Builder jobs пока нет.', renderBuilderJobItem);
+      const batchHtml = renderReleaseItems(status.release_batches, 'Batch-релизов пока нет.', (item) => {
         const statusText = item && item.status ? item.status : 'queued';
         const count = Number(item && item.package_count ? item.package_count : 0);
         const project = item && item.pages_project ? item.pages_project : 'pages';
@@ -5756,6 +6264,8 @@
 
         return '<li><strong>' + escapeHtml(statusText) + '</strong><span>' + title + '</span></li>';
       });
+      elements.batches.innerHTML = builderHtml + batchHtml;
+      bindBuilderJobApproveButtons();
     }
 
     if (elements.deployments) {
@@ -5898,27 +6408,38 @@
 
     const sshRequested = opts.ssh_mirror_requested === true
       || (opts.ssh_mirror_requested !== false && sshMirrorRequested('[data-ssh-mirror-deploy]'));
-    const builderCommand = 'php bin/cms release:cloudflare --site-id=' + siteId + ' --target=' + ((deploy && deploy.environment) || 'production');
-    const result = {
-      ok: true,
-      status: 'builder_release_required',
-      site_id: siteId,
+    const target = (deploy && deploy.environment) || 'production';
+    const builderRuntime = builderRuntimeJobPayload(opts.source || 'admin_release_status_panel');
+
+    resetReleaseStatusView('Ставлю Cloudflare Pages release в очередь: ' + builderRuntimeModeLabel(builderRuntime) + ', без GitHub Actions...', 'loading');
+
+    const result = await cloudflareCreateBuilderJob(siteId, {
+      request_id: opts.request_id || 'builder-release-' + Date.now(),
+      job_type: 'cloudflare_pages_release',
+      target,
       pages_project: cloudflare.pages_project || '',
       ssh_mirror_requested: sshRequested,
-      builder_release: {
-        required: true,
-        command: builderCommand,
-        approve_hint: 'Run once for preview; rerun with --approve-payload-sha256=<payload_sha256> after approval.'
-      },
-      warnings: [
-        'Cloudflare Pages deploy is now performed by the Ubuntu builder and Worker Direct Upload. GitHub Actions were not dispatched.'
-      ]
-    };
+      ssh_mirror: sshMirrorPayload(sshRequested, 'admin_builder_release'),
+      builder_runtime: builderRuntime,
+      source: opts.source || 'admin_release_status_panel'
+    });
 
-    resetReleaseStatusView(
-      'Release готовится через Ubuntu builder. Команда: ' + builderCommand + (sshRequested ? ' SSH mirror будет отдельным шагом после Pages deploy.' : ''),
-      'prepared'
-    );
+    if (result && result.ok) {
+      const localHint = builderRuntime.mode === 'local_mac'
+        ? ' Запустите на Mac: ' + builderRuntime.local_command + '.'
+        : ' SSH builder заберет job по worker_id ' + builderRuntime.worker_id + '.';
+      resetReleaseStatusView(
+        'Builder job создан: ' + String(result.request_id || '') + '.' + localHint + ' Дождитесь preview hash и подтвердите upload.',
+        'prepared'
+      );
+    } else {
+      const issues = result && Array.isArray(result.issues)
+        ? result.issues.join('; ')
+        : result && Array.isArray(result.errors)
+          ? result.errors.join('; ')
+          : 'builder-jobs endpoint недоступен';
+      resetReleaseStatusView('Builder job не создан: ' + issues, 'error');
+    }
 
     await refreshReleaseStatusForActiveSite({ silent: true });
     return result;
@@ -6593,6 +7114,44 @@
     }
   }
 
+  function wireBuilderRuntimePanel() {
+    const elements = builderRuntimeElements();
+
+    if (!elements.panel) {
+      return;
+    }
+
+    if (elements.serverToggle instanceof HTMLInputElement && elements.serverToggle.dataset.builderRuntimeBound !== 'true') {
+      elements.serverToggle.dataset.builderRuntimeBound = 'true';
+      elements.serverToggle.addEventListener('change', () => {
+        syncBuilderRuntimeModeFields();
+        setBuilderRuntimeStatus(elements.serverToggle.checked
+          ? 'Builder будет ожидаться на SSH сервере.'
+          : 'Builder будет запускаться локально на Mac командой из формы.');
+      });
+    }
+
+    if (elements.save instanceof HTMLButtonElement && elements.save.dataset.builderRuntimeBound !== 'true') {
+      elements.save.dataset.builderRuntimeBound = 'true';
+      elements.save.addEventListener('click', () => saveBuilderRuntimeSettings());
+    }
+
+    if (elements.check instanceof HTMLButtonElement && elements.check.dataset.builderRuntimeBound !== 'true') {
+      elements.check.dataset.builderRuntimeBound = 'true';
+      elements.check.addEventListener('click', () => checkBuilderRuntimeSecrets());
+    }
+
+    if (elements.clear instanceof HTMLButtonElement && elements.clear.dataset.builderRuntimeBound !== 'true') {
+      elements.clear.dataset.builderRuntimeBound = 'true';
+      elements.clear.addEventListener('click', () => {
+        clearBuilderRuntimeSecretValues([]);
+        setBuilderRuntimeStatus('Введенные builder secrets очищены из формы; GitHub Environment не изменялся.');
+      });
+    }
+
+    populateBuilderRuntimeForm(adminState.builderRuntime || defaultBuilderRuntimeConfig());
+  }
+
   function renderSiteWorkflow(manifest) {
     const profiles = siteProfiles(manifest);
     const select = document.querySelector('[data-active-site-select]');
@@ -6642,6 +7201,7 @@
     updateMedGenStageWidget();
     wireStageWidgetActions();
     wireReleaseStatusPanel();
+    wireBuilderRuntimePanel();
     if (!profile) {
       setBaselineStatus('Выберите Cloudflare Pages сайт перед baseline.', 'idle', false);
       setRuntimeIndexStatus('Выберите сайт и проверьте runtime index перед Direct Upload.', 'idle');
@@ -12353,34 +12913,60 @@
       build_profile: cloudflareBuildProfile(profile, siteId),
       environment: deploy.environment || 'production'
     });
-    const builderCommand = 'php bin/cms release:cloudflare --site-id=' + siteId + ' --target=' + (deploy.environment || 'production');
     const deployOk = runtimeRelease.ok === true;
-    const deployStatus = runtimeRelease.status === 'no_changes'
+    const target = deploy.environment || 'production';
+    const noChanges = runtimeRelease.status === 'no_changes';
+    const builderRuntime = builderRuntimeJobPayload('admin_publish_action');
+    const builderJob = deployOk && !noChanges
+      ? await cloudflareCreateBuilderJob(siteId, {
+        request_id: 'builder-release-' + Date.now(),
+        job_type: 'cloudflare_pages_release',
+        target,
+        pages_project: cloudflare.pages_project || '',
+        ssh_mirror_requested: false,
+        builder_runtime: builderRuntime,
+        source: 'admin_publish_action'
+      })
+      : null;
+    const builderQueued = Boolean(builderJob && builderJob.ok);
+    const deployStatus = noChanges
       ? 'runtime_release_no_changes'
-      : (deployOk ? 'runtime_release_prepared_builder_required' : 'publish_accepted_runtime_release_failed');
-
-    const result = Object.assign({}, published, {
-      ok: deployOk,
-      status: deployStatus,
-      pages_deploy: {
-        ok: false,
+      : (deployOk && builderQueued ? 'builder_release_queued' : (deployOk ? 'runtime_release_prepared_builder_queue_failed' : 'publish_accepted_runtime_release_failed'));
+    const pagesDeploy = noChanges
+      ? {
+        ok: true,
         skipped: true,
-        status: 'builder_release_required',
+        status: 'no_changes',
         deployment_id: '',
         deployment_url: '',
-        builder_command: builderCommand,
-        reason: 'Run the Ubuntu builder release command and approve the payload_sha256 before upload.'
-      },
+        builder_job: null,
+        reason: 'Cloudflare runtime had no pending packages; builder job was not queued.'
+      }
+      : {
+        ok: builderQueued,
+        skipped: false,
+        status: builderQueued ? 'builder_release_queued' : 'builder_release_queue_failed',
+        deployment_id: '',
+        deployment_url: '',
+        builder_job: builderJob,
+        reason: builderRuntimeModeLabel(builderRuntime) + ' will claim the queued job, prepare preview hash, then wait for approval before upload.'
+      };
+    const warnings = !deployOk
+      ? ['Cloudflare runtime принял publish, но runtime release не подготовлен. GitHub Actions не запускались.']
+      : noChanges
+        ? ['Cloudflare runtime не нашел новых pending правок; builder job не создавался.']
+        : builderQueued
+          ? ['Cloudflare runtime подготовил release. Builder job поставлен в очередь; Actions не запускались.']
+          : ['Cloudflare runtime подготовил release, но builder job не поставлен в очередь. GitHub Actions не запускались.'];
+
+    const result = Object.assign({}, published, {
+      ok: deployOk && (noChanges || builderQueued),
+      status: deployStatus,
+      pages_deploy: pagesDeploy,
       release_status: releaseStatus,
       runtime_release: runtimeRelease,
-      builder_release: {
-        required: true,
-        command: builderCommand,
-        approval: 'Run once for preview, then rerun with --approve-payload-sha256=<payload_sha256>.'
-      },
-      warnings: deployOk
-        ? ['Cloudflare runtime подготовил release. Следующий шаг: Ubuntu builder command для сборки, preview hash и Worker Direct Upload без GitHub Actions.']
-        : ['Cloudflare runtime принял publish, но runtime release не подготовлен. GitHub Actions не запускались.']
+      builder_release: builderJob,
+      warnings
     });
 
     refreshReleaseStatusForActiveSite({ silent: true });
@@ -15668,6 +16254,7 @@
     renderModules(manifest.modules || []);
     renderDesignPanel(payload);
     renderSiteWorkflow(manifest);
+    loadBuilderRuntimeConfig({ silent: true });
     renderSiteFleet(manifest);
     renderSiteChromeEditor(manifest);
     renderRuntime(manifest.runtime || {});
