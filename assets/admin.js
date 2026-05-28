@@ -134,7 +134,7 @@
       anchor: '#admin-medgen-product-bundle',
       focus: 'admin-medgen-product-name',
       requiresSite: true,
-      detail: 'товар + эксперт + обзор'
+      detail: 'товар + научная статья по компоненту'
     },
     product_card: {
       label: 'Работать с карточкой',
@@ -1827,18 +1827,18 @@
     return String(entry.operation || 'site_update') + ' · ' + String(entry.at || '');
   }
 
-  function firstWorkflowLink(profile) {
+  function firstStatusLink(profile) {
     const release = releaseProfile(profile);
-    const links = Array.isArray(release.workflow_links) ? release.workflow_links : [];
+    const links = Array.isArray(release.status_links) ? release.status_links : [];
     const first = links.find((link) => link && typeof link === 'object' && link.url);
-    const fallback = release.last_workflow_run_url
-      ? { label: 'Workflow', url: release.last_workflow_run_url }
+    const fallback = release.last_status_url
+      ? { label: 'Status', url: release.last_status_url }
       : null;
 
     const link = first || fallback;
     const url = link ? safeHttpHref(link.url) : '';
 
-    return url ? { label: link.label || 'Workflow', url } : null;
+    return url ? { label: link.label || 'Status', url } : null;
   }
 
   function safeHttpHref(value) {
@@ -2323,7 +2323,7 @@
   function sshMirrorToggleHtml(attributeName) {
     const available = sshMirrorAvailable(activeSiteProfile());
     const title = available
-      ? 'Если отмечено, после Cloudflare Pages deploy будет запущен отдельный SSH mirror workflow. Домен все равно остается на Cloudflare.'
+      ? 'Если отмечено, после Cloudflare Pages deploy будет запущен отдельный SSH mirror runtime. Домен все равно остается на Cloudflare.'
       : 'SSH mirror недоступен: в выбранном site profile нет сохраненного SSH target/secret_refs.';
     const attr = attributeName || 'data-ssh-mirror-deploy';
 
@@ -2335,7 +2335,7 @@
   function syncSshMirrorToggles() {
     const available = sshMirrorAvailable(activeSiteProfile());
     const title = available
-      ? 'Если отмечено, после Cloudflare Pages deploy будет запущен отдельный SSH mirror workflow. Домен все равно остается на Cloudflare.'
+      ? 'Если отмечено, после Cloudflare Pages deploy будет запущен отдельный SSH mirror runtime. Домен все равно остается на Cloudflare.'
       : 'SSH mirror недоступен: в выбранном site profile нет сохраненного SSH target/secret_refs.';
 
     document.querySelectorAll('[data-ssh-mirror-deploy], [data-medgen-ssh-mirror-deploy]').forEach((control) => {
@@ -2378,21 +2378,22 @@
 
   async function requestSshMirrorDeployForActiveSite(source) {
     const profile = activeSiteProfile();
-    const config = readGithubConfig();
     const mirror = sshMirrorConfig(profile);
 
     if (!sshMirrorAvailable(profile)) {
       return { ok: false, issues: ['ssh_mirror_not_configured'] };
     }
 
-    if (!githubToken()) {
-      return { ok: false, issues: ['github_token_required_for_ssh_mirror'] };
-    }
-
-    return githubDispatchWorkflow(config.deploy_workflow_id || 'deploy.yml', {
-      target: mirror.environment || 'production',
-      verification_mode: 'content_fast'
-    }, config.deploy_actions_url || '');
+    return {
+      ok: false,
+      action: 'ssh_mirror_builder_runtime_required',
+      issues: ['SSH mirror должен выполняться approved builder/SSH runtime, не GitHub Actions.'],
+      data: {
+        source: String(source || 'admin_cloudflare_pages_deploy'),
+        environment: mirror.environment || 'production',
+        secret_refs: mirror.secret_refs || {}
+      }
+    };
   }
 
   function syncActiveHostingActions(profile) {
@@ -5306,7 +5307,7 @@
           setMedGenOutput(result);
           setMedGenStatus(result && result.ok
             ? 'Выбранные MedGen PREVIEW приняты и отправлены в Cloudflare Pages deploy.'
-              + (sshRequested ? ' SSH mirror workflow запрошен отдельно.' : ' GitHub Actions не запускались.')
+              + (sshRequested ? ' SSH mirror runtime запрошен отдельно.' : ' GitHub Actions не запускались.')
             : 'Деплой выбранных MedGen PREVIEW не завершен. Проверьте JSON ответа.');
           await refreshRuntimeContentIndexForActiveSite({ silent: true, force: true });
           await refreshReleaseStatusForActiveSite({ silent: true });
@@ -5436,7 +5437,7 @@
 
           setMedGenOutput(result);
           setMedGenStatus(result && result.ok
-            ? 'MedGen PREVIEW принят, Cloudflare Pages deploy запрошен, SSH mirror workflow запрошен отдельно.'
+            ? 'MedGen PREVIEW принят, Cloudflare Pages deploy запрошен, SSH mirror runtime запрошен отдельно.'
             : 'Deploy SSH не завершен. Проверьте release status и JSON ответа.');
           await refreshReleaseStatusForActiveSite({ silent: true });
           await refreshMedGenTaskIndexForActiveSite({ force: true });
@@ -6257,7 +6258,7 @@
         const count = Number(item && item.package_count ? item.package_count : 0);
         const project = item && item.pages_project ? item.pages_project : 'pages';
         const label = project + ' · ' + count + ' pkg';
-        const url = item && item.workflow_run_url ? String(item.workflow_run_url) : '';
+        const url = item && item.status_url ? String(item.status_url) : '';
         const title = url
           ? '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener">' + escapeHtml(label) + '</a>'
           : escapeHtml(label);
@@ -6926,7 +6927,7 @@
     const sshPayload = sshMirrorPayload(sshRequested, 'admin_prebuilt_bundle');
 
     setDirectUploadStatus(sshRequested
-      ? 'Отправляю bundle в Cloudflare Worker; после публикации будет запрошен SSH mirror workflow...'
+      ? 'Отправляю bundle в Cloudflare Worker; после публикации нужен approved SSH mirror runtime...'
       : 'Отправляю bundle в Cloudflare Worker без GitHub Actions...', 'loading', false);
     resetReleaseStatusView('Отправляю prebuilt bundle в Cloudflare Pages Direct Upload...', 'loading');
 
@@ -6949,7 +6950,7 @@
 
     if (sshRequested && result && result.ok) {
       sshMirrorResult = await requestSshMirrorDeployForActiveSite('admin_prebuilt_bundle');
-      result.ssh_mirror_workflow = sshMirrorResult;
+      result.ssh_mirror_runtime = sshMirrorResult;
     }
 
     if (result && result.ok) {
@@ -6959,8 +6960,8 @@
         : 'Bundle опубликован: ' + summary.files + ' файлов.'
           + (sshRequested
             ? (sshMirrorResult && sshMirrorResult.ok
-              ? ' SSH mirror workflow запрошен отдельно.'
-              : ' SSH mirror не запущен: ' + ((sshMirrorResult && Array.isArray(sshMirrorResult.issues) && sshMirrorResult.issues.join('; ')) || 'проверьте deploy workflow/secrets.'))
+              ? ' SSH mirror runtime запрошен отдельно.'
+              : ' SSH mirror не запущен: ' + ((sshMirrorResult && Array.isArray(sshMirrorResult.issues) && sshMirrorResult.issues.join('; ')) || 'проверьте builder mirror runtime/secrets.'))
             : ' GitHub Actions не запускались.')
           + deploymentUrl;
       setDirectUploadStatus(message, 'done', true);
@@ -7254,8 +7255,8 @@
           + '<dt>Deploy</dt><dd>' + escapeHtml(profileDeployLabel(item)) + '</dd>'
           + '<dt>Release</dt><dd>' + escapeHtml(releaseStatusLabel(item)) + '</dd>'
           + '<dt>History</dt><dd>' + escapeHtml(releaseHistoryLabel(item)) + '</dd>'
-          + (firstWorkflowLink(item)
-            ? '<dt>Status</dt><dd><a href="' + escapeHtml(firstWorkflowLink(item).url) + '" target="_blank" rel="noreferrer noopener">' + escapeHtml(firstWorkflowLink(item).label || 'Workflow') + '</a></dd>'
+          + (firstStatusLink(item)
+            ? '<dt>Status</dt><dd><a href="' + escapeHtml(firstStatusLink(item).url) + '" target="_blank" rel="noreferrer noopener">' + escapeHtml(firstStatusLink(item).label || 'Status') + '</a></dd>'
             : '')
           + '<dt>SEO</dt><dd>' + escapeHtml((item.seo && item.seo.hreflang_policy) || 'single_locale_only') + '</dd>'
           + '</dl>'
@@ -7335,7 +7336,7 @@
     setSiteFleetField('[data-site-fleet-field="geo_country"]', profile.geo_country || '');
     setSiteFleetField('[data-site-fleet-field="status"]', profile.status || 'draft');
     setSiteFleetField('[data-site-fleet-market-field="currency"]', profile.market && profile.market.currency ? profile.market.currency : 'USD');
-    setSiteFleetField('[data-site-fleet-route-prefix="supplement"]', siteRouteNamespace(profile, 'supplement') || '/bady/');
+    setSiteFleetField('[data-site-fleet-route-prefix="supplement"]', siteRouteNamespace(profile, 'supplement') || productRoutePrefixForLocale(profile.root_locale || profile.default_locale || 'ru_RU'));
     setSiteFleetField('[data-site-fleet-route-prefix="author"]', siteRouteNamespace(profile, 'author') || '/experts/');
     setSiteFleetField('[data-site-fleet-route-prefix="article"]', siteRouteNamespace(profile, 'article') || '/guides/');
     setSiteFleetField('[data-site-fleet-deploy-field="provider"]', profile.deploy_profile && profile.deploy_profile.provider ? profile.deploy_profile.provider : 'cloudflare_pages');
@@ -7395,6 +7396,10 @@
 
     if (profile.geo_country) {
       profile.market.country = String(profile.geo_country).trim().toUpperCase();
+    }
+
+    if (!profile.market.currency) {
+      profile.market.currency = marketCurrencyForLocaleCountry(profile.root_locale || '', profile.geo_country || profile.market.country || '');
     }
 
     if (!profile.contact_email && profile.domain) {
@@ -7783,10 +7788,10 @@
       ? ' Заполненные Environment secrets будут зашифрованы и записаны.'
       : '';
     const confirmationMessage = operation === 'archive_site'
-      ? 'Удалить сайт и домен из активной панели? Профиль будет переведен в archived; публичные Cloudflare/VPS файлы и DNS/domain binding не удаляются без отдельного workflow.'
+      ? 'Удалить сайт и домен из активной панели? Профиль будет переведен в archived; публичные Cloudflare/VPS файлы и DNS/domain binding не удаляются без отдельного cleanup runtime.'
       : (provider === 'cloudflare_pages'
           ? 'Сохранить профиль сайта в Cloudflare runtime и GitHub Contents без запуска Actions?' + environmentSecretConfirmSuffix
-          : 'Сохранить legacy VPS профиль через GitHub Actions?' + environmentSecretConfirmSuffix);
+          : 'Сохранить legacy VPS профиль как backup config без запуска Actions?' + environmentSecretConfirmSuffix);
 
     if (!dryRun && !window.confirm(confirmationMessage)) {
       setSiteFleetFormStatus('Операция отменена');
@@ -8184,7 +8189,7 @@
     let value = (description || '').trim();
 
     if (!value) {
-      value = 'Стартовый черновик страницы "' + title + '" для CMS NutriScope: SEO-поля, маршрут, модули и публикация через draft workflow.';
+      value = 'Стартовый черновик страницы "' + title + '" для CMS NutriScope: SEO-поля, маршрут, модули и публикация через payload composer.';
     }
 
     if (value.length < 50) {
@@ -9415,7 +9420,7 @@
       || profile.locale
       || profile.default_locale
       || (field instanceof HTMLInputElement ? field.value : '')
-      || 'bg_BG'
+      || 'ru_RU'
     ).trim().replace('-', '_');
 
     if (/^[a-z]{2}_[A-Z]{2}$/.test(raw)) {
@@ -9429,7 +9434,129 @@
       return language + '_' + (country || language.toUpperCase());
     }
 
-    return 'bg_BG';
+    return 'ru_RU';
+  }
+
+  function medGenLocaleParts(locale) {
+    const normalized = String(locale || 'ru_RU').trim().replace('-', '_');
+    const match = normalized.match(/^([a-z]{2})_([A-Z]{2})$/);
+
+    if (match) {
+      return {
+        language: match[1],
+        country: match[2]
+      };
+    }
+
+    return {
+      language: 'ru',
+      country: 'RU'
+    };
+  }
+
+  function productRoutePrefixForLocale(locale) {
+    const normalized = String(locale || 'ru_RU').trim().replace('_', '-').toLowerCase();
+
+    if (normalized.startsWith('pl')) {
+      return '/recenzje/';
+    }
+
+    if (normalized.startsWith('ru')) {
+      return '/obzory/';
+    }
+
+    return '/reviews/';
+  }
+
+  function productRouteForSlug(slug, locale) {
+    const safeSlug = normalizeSlug(slug);
+
+    return safeSlug ? productRoutePrefixForLocale(locale) + safeSlug + '/' : '';
+  }
+
+  function productEvidenceAnchorRoute(productRoute) {
+    const route = String(productRoute || '').trim();
+
+    if (!route) {
+      return '';
+    }
+
+    return route.replace(/#.*$/, '').replace(/\/?$/, '/') + '#component-evidence';
+  }
+
+  function marketCurrencyForLocaleCountry(locale, country) {
+    const localeParts = medGenLocaleParts(locale);
+    const normalizedCountry = String(country || localeParts.country || '').trim().slice(0, 2).toUpperCase();
+
+    return {
+      RU: 'RUB',
+      KZ: 'KZT',
+      PL: 'PLN',
+      BG: 'BGN',
+      RO: 'RON',
+      CZ: 'CZK',
+      HU: 'HUF',
+      TR: 'TRY',
+      GB: 'GBP',
+      UK: 'GBP',
+      US: 'USD',
+      CA: 'CAD',
+      AU: 'AUD',
+      NZ: 'NZD'
+    }[normalizedCountry] || 'EUR';
+  }
+
+  function medGenMarketCurrencyForActiveSite(profile, locale) {
+    const source = profile || activeSiteProfile() || {};
+    const explicit = source.market && typeof source.market === 'object' ? String(source.market.currency || '').trim().toUpperCase() : '';
+
+    if (/^[A-Z]{3}$/.test(explicit)) {
+      return explicit;
+    }
+
+    return marketCurrencyForLocaleCountry(locale, source.geo_country || '');
+  }
+
+  function medGenPriceCurrencyCode(value) {
+    const text = String(value || '').toUpperCase();
+
+    if (!text.trim()) {
+      return '';
+    }
+
+    const codeMatch = text.match(/\b(USD|EUR|GBP|PLN|RUB|KZT|BGN|RON|CZK|HUF|TRY|CAD|AUD|NZD)\b/);
+
+    if (codeMatch) {
+      return codeMatch[1];
+    }
+
+    if (text.includes('₽') || text.includes('РУБ')) {
+      return 'RUB';
+    }
+
+    if (text.includes('$')) {
+      return 'USD';
+    }
+
+    if (text.includes('€')) {
+      return 'EUR';
+    }
+
+    if (text.includes('£')) {
+      return 'GBP';
+    }
+
+    return '';
+  }
+
+  function medGenProductPriceForMarket(value, marketCurrency) {
+    const text = String(value || '').trim();
+
+    if (!text) {
+      return '';
+    }
+
+    return medGenPriceCurrencyCode(text) ? text : text + ' ' + marketCurrency;
   }
 
   function medGenProductBundleSite() {
@@ -9446,8 +9573,9 @@
   function medGenProductBundleRoleLabel(role) {
     return {
       product_card: 'Товар',
-      expert_profile: 'Эксперт',
-      product_review: 'Обзор'
+      component_evidence_article: 'Статья по компоненту',
+      expert_profile: 'Эксперт (legacy)',
+      product_review: 'Обзор (legacy)'
     }[role] || role || 'Задача';
   }
 
@@ -9472,13 +9600,13 @@
     return tasks.filter((taskRecord) => {
       const extra = medgenTaskExtra(taskRecord);
 
-      return extra.cmx_bundle_type === 'cmx_product_bundle'
+      return (extra.cmx_bundle_type === 'cmx_ingredient_evidence_bundle' || extra.cmx_bundle_type === 'cmx_product_bundle')
         && (!normalizedBundleId || medGenProductBundleTaskId(taskRecord) === normalizedBundleId);
     });
   }
 
   function medGenProductBundleStatus(bundleId) {
-    const expectedRoles = ['product_card', 'expert_profile', 'product_review'];
+    const expectedRoles = ['product_card', 'component_evidence_article'];
     const tasks = medGenProductBundleTasks(bundleId);
     const roleState = {};
 
@@ -9520,10 +9648,10 @@
     const bundle_deployed_count = values.filter((item) => item.deployed).length;
 
     return {
-      ok: values.length === 3,
+      ok: values.length === 2,
       bundle_id: String(bundleId || '').trim(),
       site_id: activeSiteKey(),
-      required_count: 3,
+      required_count: 2,
       present_count: values.filter((item) => item.present).length,
       bundle_ready_count,
       bundle_preview_ready_count,
@@ -9566,7 +9694,7 @@
 
     if (status.present_count > 0) {
       setMedGenProductBundleStatus(
-        'Связка: задач ' + status.present_count + '/3, ready ' + status.bundle_ready_count + '/3, preview ' + status.bundle_preview_ready_count + '/3.'
+        'Evidence-пакет: задач ' + status.present_count + '/2, ready ' + status.bundle_ready_count + '/2, preview ' + status.bundle_preview_ready_count + '/2.'
       );
     }
 
@@ -9578,23 +9706,26 @@
     const siteId = activeSiteKey();
     const site = medGenProductBundleSite();
     const locale = medGenLocaleForActiveSite();
+    const localeParts = medGenLocaleParts(locale);
+    const marketCurrency = medGenMarketCurrencyForActiveSite(profile, locale);
     const productName = medGenBundleField('[data-medgen-bundle-product-field="name"]', '#admin-medgen-product-name');
     const productBrand = medGenBundleField('[data-medgen-bundle-product-field="brand"]', '#admin-medgen-product-brand');
-    const productPrice = medGenBundleField('[data-medgen-bundle-product-field="price"]', '');
+    const keyComponent = medGenBundleField('[data-medgen-bundle-product-field="component"]', '');
+    const rawProductPrice = medGenBundleField('[data-medgen-bundle-product-field="price"]', '');
+    const productPriceCurrency = medGenPriceCurrencyCode(rawProductPrice);
+    const productPrice = medGenProductPriceForMarket(rawProductPrice, marketCurrency);
     const sellerUrl = medGenBundleField('[data-medgen-bundle-product-field="seller_url"]', '');
     const productImage = medGenBundleField('[data-medgen-bundle-product-field="image"]', '');
     const productSlug = normalizeSlug(medGenBundleField('[data-medgen-bundle-product-field="slug"]', '') || productName);
-    const expertName = medGenBundleField('[data-medgen-bundle-author-field="name"]', '#admin-medgen-author-name') || 'Editorial reviewer';
-    const expertRole = medGenBundleField('[data-medgen-bundle-author-field="role"]', '#admin-medgen-author-role') || 'medical reviewer';
-    const expertBackground = medGenBundleField('[data-medgen-bundle-author-field="background"]', '#admin-medgen-author-background') || 'Reviewer profile for the product content bundle.';
-    const expertSlug = normalizeSlug(expertName);
-    const reviewTitle = medGenBundleField('[data-medgen-bundle-review-field="title"]', '') || (productName ? productName + ' review' : '');
-    const reviewSlug = normalizeSlug(productSlug ? productSlug + '-review' : reviewTitle);
+    const productComposition = medGenBundleField('[data-medgen-bundle-product-field="composition"]', '');
+    const componentSlug = normalizeSlug(keyComponent || (productName ? productName + ' key ingredient' : 'component-evidence'));
+    const evidenceTitle = keyComponent
+      ? keyComponent + ' evidence review'
+      : (productName ? productName + ' key component evidence' : '');
     const notes = medGenBundleField('[data-medgen-bundle-field="notes"]', '#admin-medgen-notes');
-    const productRoute = productSlug ? '/bady/' + productSlug + '/' : '';
-    const reviewRoute = reviewSlug ? '/obzory/' + reviewSlug + '/' : '';
-    const expertRoute = expertSlug ? '/experts/' + expertSlug + '/' : '';
-    const bundleId = 'cmx-product-bundle-' + (siteId || 'site') + '-' + (productSlug || 'product');
+    const productRoute = productRouteForSlug(productSlug, locale);
+    const evidenceRoute = productEvidenceAnchorRoute(productRoute);
+    const bundleId = 'cmx-ingredient-evidence-' + (siteId || 'site') + '-' + (productSlug || 'product');
     const issues = [];
 
     if (!profile || !siteId) {
@@ -9609,43 +9740,55 @@
     if (!productSlug) {
       issues.push('product_slug_required');
     }
-    if (!reviewTitle) {
-      issues.push('review_title_required');
+    if (!keyComponent) {
+      issues.push('key_component_required');
     }
-    if (!expertName) {
-      issues.push('expert_name_required');
+    if (productPriceCurrency && productPriceCurrency !== marketCurrency) {
+      issues.push('product_price_currency_mismatch: expected ' + marketCurrency + ', got ' + productPriceCurrency);
     }
 
     const product = {
       name: productName,
       brand: productBrand
     };
-    if (sellerUrl) {
-      product.official_urls = [sellerUrl];
-    }
 
     const productInput = {
       price: productPrice,
+      market_currency: marketCurrency,
       seller_url: sellerUrl,
-      image: productImage
+      image: productImage,
+      key_component: keyComponent,
+      composition: productComposition
     };
     const sharedExtra = {
-      cmx_bundle_type: 'cmx_product_bundle',
+      cmx_bundle_type: 'cmx_ingredient_evidence_bundle',
       bundle_id: bundleId,
-      completion_rule: 'complete_only_after_product_expert_review_preview_approval',
-      same_reviewer_required: true,
-      required_pages: ['product_card', 'expert_profile', 'product_review'],
+      completion_rule: 'complete_after_product_card_and_component_evidence_preview_approval',
+      required_pages: ['product_card', 'component_evidence_section'],
       product_route: productRoute,
-      review_route: reviewRoute,
-      reviewer_route: expertRoute,
+      component_article_route: evidenceRoute,
+      component_article_anchor_id: 'component-evidence',
+      key_component: keyComponent,
+      research_protocol: [
+        'identify_key_component_from_product_or_composition',
+        'find_scientific_articles_for_component',
+        'rewrite_scientific_article_for_public_page',
+        'return_sources_with_authors_titles_urls_and_years'
+      ],
       cmx_output_contract: {
         contract_url: 'https://cmx-medgen-contract.pages.dev/contract.md',
         registry_url: 'https://cmx-medgen-contract.pages.dev/page-format-registry.json'
-      }
+      },
+      locale,
+      language: localeParts.language,
+      country: localeParts.country,
+      market_currency: marketCurrency
     };
     const baseNotes = [
       notes,
-      'CMX product content bundle: generate only the requested page skeleton part and keep product, expert, and review linked by routes.'
+      'CMX ingredient evidence bundle: generate only the requested page skeleton part. The product page contains the component evidence article as a same-page section with anchor #component-evidence; the CTA scrolls to this section and does not open a separate guide page.',
+      'MedGen protocol: use the required key active component supplied by CMX, find scientific articles about that component, rewrite the evidence for the requested locale, and return sources with article authors, titles, URLs and publication details when available.',
+      sellerUrl ? 'The seller_url is a CTA target for the product button, not a research or bibliography source.' : ''
     ].filter(Boolean).join('\n\n');
 
     const wrappers = [
@@ -9656,11 +9799,15 @@
           type: 'content_page',
           page_title: productName,
           locale,
-          site,
+          language: localeParts.language,
+          country: localeParts.country,
+          site: Object.assign({}, site, { market: { currency: marketCurrency } }),
           product,
           target: {
             slug: productSlug,
             route: productRoute,
+            product_route: productRoute,
+            component_article_route: evidenceRoute,
             content_path: 'content/pages/supplements/' + productSlug + '.json'
           },
           notes: baseNotes,
@@ -9673,54 +9820,37 @@
         publish: true
       },
       {
-        role: 'expert_profile',
-        label: 'Expert profile',
-        payload: {
-          type: 'author',
-          page_title: expertName,
-          locale,
-          site,
-          author: {
-            name: expertName,
-            role: expertRole,
-            background: expertBackground
-          },
-          target: {
-            slug: expertSlug,
-            route: expertRoute,
-            content_path: 'content/pages/authors/' + expertSlug + '.json'
-          },
-          notes: baseNotes,
-          extra: Object.assign({}, sharedExtra, {
-            cmx_content_type: 'expert_profile',
-            bundle_role: 'expert_profile'
-          })
-        },
-        publish: true
-      },
-      {
-        role: 'product_review',
-        label: 'Product review',
+        role: 'component_evidence_article',
+        label: 'Component evidence article',
         payload: {
           type: 'content_page',
-          page_title: reviewTitle,
+          page_title: evidenceTitle,
           locale,
-          site,
+          language: localeParts.language,
+          country: localeParts.country,
+          site: Object.assign({}, site, { market: { currency: marketCurrency } }),
           product,
-          author: {
-            name: expertName,
-            role: expertRole,
-            background: expertBackground
-          },
           target: {
-            slug: reviewSlug,
-            route: reviewRoute,
-            content_path: 'content/pages/technical/' + reviewSlug + '.json'
+            slug: productSlug,
+            route: evidenceRoute,
+            product_route: productRoute,
+            content_path: 'content/pages/supplements/' + productSlug + '.json',
+            anchor_id: 'component-evidence'
           },
           notes: baseNotes,
           extra: Object.assign({}, sharedExtra, {
-            cmx_content_type: 'product_review',
-            bundle_role: 'product_review'
+            cmx_content_type: 'component_evidence_article',
+            bundle_role: 'component_evidence_article',
+            component_name: keyComponent,
+            product_composition: productComposition,
+            source_requirements: {
+              primary_topic: keyComponent || 'key component identified by MedGen from product composition',
+              source_kind: 'scientific_article',
+              include_authors: true,
+              include_publication_title: true,
+              include_url: true,
+              include_year_or_date: true
+            }
           })
         },
         publish: true
@@ -9733,12 +9863,14 @@
       site_id: siteId,
       bundle_id: bundleId,
       locale,
+      language: localeParts.language,
+      country: localeParts.country,
+      market_currency: marketCurrency,
       routes: {
         product: productRoute,
-        expert: expertRoute,
-        review: reviewRoute
+        component_evidence: evidenceRoute
       },
-      completion_rule: 'complete_only_after_product_expert_review_preview_approval',
+      completion_rule: 'complete_after_product_card_and_component_evidence_preview_approval',
       issues,
       tasks: wrappers
     };
@@ -9760,29 +9892,29 @@
     const bundle = medGenProductBundlePayloads();
     const status = syncMedGenProductBundleStatus();
 
-    if (status.bundle_ready_count !== 3) {
+    if (status.bundle_ready_count !== 2) {
       const result = Object.assign({}, status, {
         ok: false,
         action: 'medgen_product_bundle_preview',
-        issues: ['bundle_requires_3_succeeded_tasks_before_preview']
+        issues: ['bundle_requires_2_succeeded_tasks_before_preview']
       });
 
       setMedGenProductBundleOutput(result);
-      setMedGenProductBundleStatus('Preview связки остановлен: нужно 3/3 succeeded задач.');
+      setMedGenProductBundleStatus('Preview пакета остановлен: нужно 2/2 succeeded задач.');
       return result;
     }
 
     const siteId = activeSiteKey();
     const previewResults = [];
     setStatusBusy('admin-medgen-product-bundle-status', true);
-    setMedGenProductBundleStatus('Собираю preview для 3 страниц товарной связки...');
+    setMedGenProductBundleStatus('Собираю preview для 2 страниц evidence-пакета...');
 
     try {
       for (const taskId of status.ready_task_ids) {
         previewResults.push(Object.assign({ task_id: taskId }, await cloudflareCreateMedGenPreview(siteId, taskId)));
       }
 
-      const ok = previewResults.length === 3 && previewResults.every((result) => result && result.ok);
+      const ok = previewResults.length === 2 && previewResults.every((result) => result && result.ok);
       const firstPreviewUrl = previewResults.map(medgenPreviewResultUrl).find(Boolean) || '';
       const result = {
         ok,
@@ -9797,8 +9929,8 @@
       setMedGenProductBundleOutput(result);
       setMedGenOutput(result);
       setMedGenProductBundleStatus(ok
-        ? 'Preview связки собран: 3/3 страницы готовы к approval.'
-        : 'Preview связки собран не полностью. Проверьте JSON ответа.');
+        ? 'Preview evidence-пакета собран: 2/2 страницы готовы к approval.'
+        : 'Preview evidence-пакета собран не полностью. Проверьте JSON ответа.');
       await refreshRuntimeContentIndexForActiveSite({ silent: true, force: true });
       await refreshReleaseStatusForActiveSite({ silent: true });
       await refreshMedGenTaskIndexForActiveSite({ force: true });
@@ -9829,25 +9961,25 @@
     const bundle = medGenProductBundlePayloads();
     const status = syncMedGenProductBundleStatus();
 
-    if (status.bundle_ready_count !== 3) {
+    if (status.bundle_ready_count !== 2) {
       const result = Object.assign({}, status, {
         ok: false,
         action: 'medgen_product_bundle_deploy',
-        issues: ['bundle_requires_3_succeeded_tasks_before_deploy']
+        issues: ['bundle_requires_2_succeeded_tasks_before_deploy']
       });
 
       setMedGenProductBundleOutput(result);
-      setMedGenProductBundleStatus('Deploy связки остановлен: нужно 3/3 succeeded задач.');
+      setMedGenProductBundleStatus('Deploy пакета остановлен: нужно 2/2 succeeded задач.');
       return result;
     }
 
-    if (!window.confirm('Подтвердить approval и отправить deploy всей товарной связки: товар, эксперт, обзор?')) {
-      setMedGenProductBundleStatus('Deploy товарной связки отменен.');
+    if (!window.confirm('Подтвердить approval и отправить deploy evidence-пакета: товар и статья по компоненту?')) {
+      setMedGenProductBundleStatus('Deploy evidence-пакета отменен.');
       return Object.assign({}, status, { ok: false, cancelled: true });
     }
 
     setStatusBusy('admin-medgen-product-bundle-status', true);
-    setMedGenProductBundleStatus('Подтверждаю preview и деплою товарную связку...');
+    setMedGenProductBundleStatus('Подтверждаю preview и деплою evidence-пакет...');
 
     try {
       const result = await deployMedGenPreviewTasks(activeSiteKey(), status.ready_task_ids, 'medgen_product_bundle_deploy', {
@@ -9861,8 +9993,8 @@
       setMedGenProductBundleOutput(combined);
       setMedGenOutput(combined);
       setMedGenProductBundleStatus(combined && combined.ok
-        ? 'Товарная связка прошла approval и отправлена в Cloudflare Pages deploy.'
-        : 'Deploy товарной связки не завершен. Проверьте JSON и release status.');
+        ? 'Evidence-пакет прошел approval и отправлен в Cloudflare Pages deploy.'
+        : 'Deploy evidence-пакета не завершен. Проверьте JSON и release status.');
       await refreshRuntimeContentIndexForActiveSite({ silent: true, force: true });
       await refreshReleaseStatusForActiveSite({ silent: true });
       await refreshMedGenTaskIndexForActiveSite({ force: true });
@@ -9877,7 +10009,7 @@
     if (!isGithubMode()) {
       const result = { ok: false, issues: ['github_pages_admin_required'] };
 
-      setMedGenProductBundleStatus('Товарная связка доступна только в CMS-admin_v2 на GitHub Pages.');
+      setMedGenProductBundleStatus('Evidence-пакет товара доступен только в CMS-admin_v2 на GitHub Pages.');
       setMedGenProductBundleOutput(result);
       return result;
     }
@@ -9891,8 +10023,8 @@
     if (dryRun || !bundle.ok) {
       setMedGenProductBundleOutput(bundle);
       setMedGenProductBundleStatus(bundle.ok
-        ? 'Связка валидна: будут созданы 3 MedGen задачи без GitHub Actions.'
-        : 'Связка требует правки: ' + bundle.issues.join('; '));
+        ? 'Пакет валиден: будут созданы 2 MedGen задачи без GitHub Actions.'
+        : 'Пакет требует правки: ' + bundle.issues.join('; '));
       return bundle;
     }
 
@@ -9903,23 +10035,23 @@
       });
 
       setMedGenProductBundleOutput(result);
-      setMedGenProductBundleStatus('Товарная связка остановлена: нужен Cloudflare runtime, чтобы не тратить GitHub Actions.');
+      setMedGenProductBundleStatus('Evidence-пакет остановлен: нужен Cloudflare runtime, чтобы не тратить GitHub Actions.');
       return result;
     }
 
-    if (!window.confirm('Создать 3 MedGen задачи для товарной связки: товар, эксперт и обзор? GitHub Actions не будут запускаться.')) {
-      setMedGenProductBundleStatus('Создание товарной связки отменено.');
+    if (!window.confirm('Создать 2 MedGen задачи для evidence-пакета: товар и научная статья по компоненту? GitHub Actions не будут запускаться.')) {
+      setMedGenProductBundleStatus('Создание evidence-пакета отменено.');
       return Object.assign({}, bundle, { ok: false, cancelled: true });
     }
 
-    setMedGenProductBundleStatus('Создаю MedGen задачи товарной связки...');
-    setMedGenStatus('Создаю MedGen product bundle через Worker...');
+    setMedGenProductBundleStatus('Создаю MedGen задачи evidence-пакета...');
+    setMedGenStatus('Создаю MedGen ingredient evidence package через Worker...');
     setStatusBusy('admin-medgen-product-bundle-status', true);
     setStatusBusy('admin-medgen-status', true);
     updateMedGenStageWidget({
       state: 'running',
-      summary: 'Product bundle',
-      detail: 'Создаются 3 связанные задачи: product card, expert profile, product review.'
+      summary: 'Evidence package',
+      detail: 'Создаются 2 связанные задачи: product card и component evidence article.'
     });
 
     const results = [];
@@ -9948,7 +10080,7 @@
         });
       }
 
-      const ok = results.length === 3 && results.every((item) => item.ok);
+      const ok = results.length === 2 && results.every((item) => item.ok);
       const createdTasks = results
         .map((item) => item.runtime && item.runtime.task ? medgenTaskRecordFromRuntime(item.runtime.task) : null)
         .filter(Boolean);
@@ -9965,19 +10097,19 @@
         action: 'medgen_product_bundle_create',
         created_task_count: createdTasks.length,
         results,
-        warnings: ['Карточка товара не считается complete до succeeded + preview + approval всех трех задач.']
+        warnings: ['Товарный пакет не считается complete до succeeded + preview + approval карточки товара и статьи по компоненту.']
       });
 
       setMedGenProductBundleOutput(combined);
       setMedGenOutput(combined);
       setMedGenProductBundleStatus(ok
-        ? 'Созданы 3 MedGen задачи. Дождитесь succeeded, затем соберите preview и approval.'
-        : 'Создание связки остановлено: часть задач не создана.');
-      setMedGenStatus(ok ? 'MedGen product bundle создан через Worker.' : 'MedGen product bundle создан частично или с ошибкой.');
+        ? 'Созданы 2 MedGen задачи. Дождитесь succeeded, затем соберите preview и approval.'
+        : 'Создание evidence-пакета остановлено: часть задач не создана.');
+      setMedGenStatus(ok ? 'MedGen evidence package создан через Worker.' : 'MedGen evidence package создан частично или с ошибкой.');
       syncMedGenProductBundleStatus();
       updateMedGenStageWidget({
         state: ok ? 'running' : 'error',
-        summary: ok ? '3 задачи созданы' : 'Bundle ошибка',
+        summary: ok ? '2 задачи созданы' : 'Evidence ошибка',
         detail: ok ? 'Следующий шаг: poll task_id, preview, approval.' : 'Проверьте Product bundle JSON.'
       });
       window.setTimeout(() => refreshMedGenTaskIndexForActiveSite({ force: true }), 8000);
@@ -10022,10 +10154,7 @@
     }
 
     const config = readGithubConfig();
-    const timeoutField = byId('admin-medgen-timeout');
-    const intervalField = byId('admin-medgen-interval');
-    const deployField = byId('admin-medgen-deploy');
-    const workflow = config.medgen_workflow_id || 'medgen-content.yml';
+    const workflow = config.medgen_workflow_id || 'archived:medgen-content.yml';
     const payload = collectMedGenPayload();
     const siteId = activeSiteKey();
 
@@ -10139,11 +10268,11 @@
       const result = {
         ok: false,
         issues: ['cloudflare_runtime_required_for_medgen'],
-        human: 'Для Cloudflare Pages сайтов MedGen create/poll работает только через Worker/D1/R2. Legacy medgen-content.yml отключен, чтобы не расходовать GitHub Actions.'
+        human: 'Для Cloudflare Pages сайтов MedGen create/poll работает только через Worker/D1/R2. Архивный medgen-content.yml не является fallback, чтобы не расходовать GitHub Actions.'
       };
 
       setMedGenOutput(result);
-      setMedGenStatus('MedGen workflow fallback отключен для Cloudflare Pages. Проверьте Worker/runtime подключение.');
+      setMedGenStatus('MedGen archived restore kit отключен для Cloudflare Pages. Проверьте Worker/runtime подключение.');
       updateMedGenStageWidget({
         state: 'error',
         summary: 'Worker runtime недоступен',
@@ -10152,59 +10281,20 @@
       return;
     }
 
-    setMedGenStatus(dryRun ? 'Проверяю MedGen payload...' : (isPoll ? 'Проверяю MedGen task_id...' : 'Создаю MedGen task_id...'));
+    const result = {
+      ok: false,
+      issues: ['worker_runtime_required_for_medgen'],
+      archived_restore_kit: workflow,
+      human: 'MedGen create/poll не запускается через GitHub Actions. Подключите Worker runtime для выбранного сайта или вручную восстановите archived restore kit вне обычного production path.'
+    };
+
+    setMedGenOutput(result);
+    setMedGenStatus('MedGen остановлен: Worker runtime недоступен, GitHub Actions не являются fallback.');
     updateMedGenStageWidget({
-      state: dryRun ? 'idle' : 'running',
-      summary: dryRun ? 'Проверка payload' : (isPoll ? 'Проверка task_id' : 'Создание task_id'),
-      detail: dryRun
-        ? 'Проверяется структура запроса без публикации.'
-        : 'Workflow должен завершиться быстро и не ждать 15-30 минут генерации MedGen.'
+      state: 'error',
+      summary: 'Worker runtime недоступен',
+      detail: result.human
     });
-    setStatusBusy('admin-medgen-status', true);
-
-    try {
-      const result = await githubDispatchWorkflow(workflow, {
-        medgen_payload_json: JSON.stringify(payload),
-        dry_run: dryRun ? 'true' : 'false',
-        mode: dryRun ? 'create_task' : workflowMode,
-        task_id: taskId,
-        poll_timeout_seconds: timeoutField && timeoutField.value.trim() ? timeoutField.value.trim() : '1800',
-        poll_interval_seconds: intervalField && intervalField.value.trim() ? intervalField.value.trim() : '5',
-        deploy_static_vps: deployField && deployField.checked && !dryRun && hostingProvider(activeSiteProfile()) === 'static_vps' ? 'true' : 'false',
-        target: 'production'
-      }, config.medgen_actions_url || '');
-
-      setMedGenOutput(result);
-      setMedGenStatus(result.ok ? (isPoll ? 'Проверка MedGen запущена. Если задача готова, результат будет применен.' : 'MedGen task creation запущен. Workflow не будет ждать 15-30 минут.') : 'MedGen workflow не запущен.');
-      const medgenReady = result && (
-        result.status === 'succeeded'
-        || result.medgen_status === 'succeeded'
-        || (result.task && result.task.status === 'succeeded')
-      );
-      updateMedGenStageWidget(result.ok
-        ? {
-          state: medgenReady ? 'ready' : (isPoll ? 'pending' : (dryRun ? 'ready' : 'running')),
-          summary: medgenReady ? 'Контент готов' : (isPoll ? 'Ожидает результат' : (dryRun ? 'Payload готов' : 'Task создан')),
-          detail: medgenReady
-            ? 'MedGen вернул готовый результат для выбранного сайта. Проверьте preview и запустите deploy.'
-            : (isPoll
-              ? 'Проверка task_id запущена. Если MedGen еще работает, Actions не должны ждать долгую генерацию.'
-              : (dryRun
-                ? 'Payload валиден для выбранного сайта.'
-                : 'Task_id создан отдельно от долгого ожидания. Вернитесь позже и запустите проверку task_id.')),
-          action: medgenReady ? 'Deploy' : ''
-        }
-        : {
-          state: 'error',
-          summary: 'MedGen не запущен',
-          detail: Array.isArray(result.issues) ? result.issues.join('; ') : 'Workflow вернул ошибку.'
-        });
-      if (result.ok && !dryRun) {
-        window.setTimeout(() => refreshMedGenTaskIndexForActiveSite({ force: true }), 12000);
-      }
-    } finally {
-      setStatusBusy('admin-medgen-status', false);
-    }
   }
 
   function slugFromDomainValue(value) {
@@ -10276,12 +10366,13 @@
     }
 
     if (defaultLocaleField && !defaultLocaleField.value.trim()) {
-      defaultLocaleField.value = 'en';
+      defaultLocaleField.value = 'en_US';
     }
 
     const seed = routeSeedField && routeSeedField.value.trim() ? routeSeedField.value.trim() : slugFromDomainValue(domain);
+    const selectedLocale = defaultLocaleField && defaultLocaleField.value.trim() ? defaultLocaleField.value.trim() : 'en_US';
     const routeDefaults = {
-      supplement: '/' + seed + '-reviews/',
+      supplement: productRoutePrefixForLocale(selectedLocale),
       author: '/' + seed + '-experts/',
       article: '/' + seed + '-guides/'
     };
@@ -10420,7 +10511,7 @@
       : 'cloudflare_pages';
 
     if (isGithubMode() && provider === 'cloudflare_pages') {
-      if (!dryRun && !window.confirm('Сохранить Cloudflare Pages профиль в Worker/D1 без запуска GitHub Actions?')) {
+      if (!dryRun && !window.confirm('Сохранить Cloudflare Pages профиль в Worker/D1 без запуска Actions?')) {
         setDomainStatus('Применение отменено');
         return;
       }
@@ -10430,8 +10521,9 @@
 
       try {
         const siteId = cloudflareSiteIdFromProfile(payload);
+        const brandName = String(payload.brand_name || '').trim();
         const validation = {
-          ok: Boolean(siteId && payload.domain && payload.base_url && payload.deploy_profile.cloudflare && payload.deploy_profile.cloudflare.pages_project),
+          ok: Boolean(siteId && payload.domain && payload.base_url && brandName && payload.deploy_profile.cloudflare && payload.deploy_profile.cloudflare.pages_project),
           action: 'cloudflare_site_profile_validate',
           dry_run: dryRun,
           site_id: siteId,
@@ -10446,6 +10538,9 @@
         }
         if (!payload.base_url) {
           validation.issues.push('base_url_required');
+        }
+        if (!brandName) {
+          validation.issues.push('brand_name_required');
         }
         if (!payload.deploy_profile.cloudflare || !payload.deploy_profile.cloudflare.pages_project) {
           validation.issues.push('cloudflare_pages_project_required');
@@ -10469,19 +10564,19 @@
     }
 
     if (isGithubMode()) {
-      if (!dryRun && !window.confirm('Запустить GitHub workflow для нового доменного профиля и последующего статического деплоя?')) {
+      if (!dryRun && !window.confirm('GitHub Actions архивированы. Сохранить профиль только как backup commit без build/deploy?')) {
         setDomainStatus('Применение отменено');
         return;
       }
 
-      setDomainStatus(dryRun ? 'GitHub dry-run доменного профиля...' : 'Запускаю GitHub workflow доменного профиля...');
+      setDomainStatus(dryRun ? 'GitHub dry-run доменного профиля...' : 'Сохраняю доменный профиль без запуска Actions...');
       setStatusBusy('admin-domain-status', true);
 
       try {
         const result = await githubDispatchCommand('site_rebrand', payload, dryRun);
 
         setDomainOutput(result);
-        setDomainStatus(result.ok ? (dryRun ? 'GitHub dry-run профиля запущен.' : 'GitHub workflow профиля запущен.') : 'GitHub workflow профиля не запущен.');
+        setDomainStatus(result.ok ? (dryRun ? 'GitHub dry-run профиля выполнен.' : 'GitHub backup профиля сохранен без Actions.') : 'GitHub backup профиля не выполнен.');
       } finally {
         setStatusBusy('admin-domain-status', false);
       }
@@ -10556,23 +10651,14 @@
       return;
     }
 
-    setServerMaintenanceStatus('Запускаю server-maintenance workflow...');
-    setStatusBusy('admin-server-maintenance-status', true);
-
-    try {
-      const config = readGithubConfig();
-      const workflow = config.server_maintenance_workflow_id || 'server-maintenance.yml';
-      const result = await githubDispatchWorkflow(workflow, {
-        action,
-        target,
-        purge_runtime_packages: purgeRuntimePackages ? 'true' : 'false'
-      }, config.server_maintenance_actions_url || '');
-
-      setServerMaintenanceOutput(result);
-      setServerMaintenanceStatus(result.ok ? 'Server maintenance workflow запущен.' : 'Server maintenance workflow не запущен.');
-    } finally {
-      setStatusBusy('admin-server-maintenance-status', false);
-    }
+    const result = {
+      ok: false,
+      action: 'archived_restore_kit_disabled',
+      issues: ['server-maintenance.yml находится только в docs/github-actions-backup/ и не запускается из production UI. Используйте approved builder/SSH runtime.'],
+      data: { target, purge_runtime_packages: purgeRuntimePackages }
+    };
+    setServerMaintenanceOutput(result);
+    setServerMaintenanceStatus('Server maintenance через GitHub Actions отключен; нужен approved SSH/builder runtime.');
   }
 
   function requestId(prefix) {
@@ -11009,8 +11095,12 @@
       price_range: 'При редактировании этой строки меняется цена, которую пользователь видит рядом с кнопкой покупки.',
       buy_button: 'При редактировании этой строки меняется текст кнопки покупки.',
       buy_url: 'При редактировании этой строки меняется ссылка, куда попадет пользователь после клика по кнопке покупки.',
-      review_cta_label: 'При редактировании этой строки меняется текст кнопки или ссылки, ведущей на обзор товара.',
-      review_route: 'При редактировании этой строки меняется путь к странице обзора, на которую ведет карточка товара.',
+      key_component: 'При редактировании этой строки меняется главный компонент товара, по которому MedGen будет искать научные источники.',
+      composition: 'При редактировании этой строки меняется состав товара. Если ключевой компонент не указан, MedGen использует состав, чтобы выбрать главный компонент.',
+      component_article_route: 'При редактировании этой строки меняется путь к evidence-статье о ключевом компоненте товара.',
+      evidence_cta_label: 'При редактировании этой строки меняется текст кнопки, ведущей на evidence-статью по компоненту.',
+      review_cta_label: 'Legacy: при редактировании этой строки меняется текст кнопки или ссылки, ведущей на старый обзор товара.',
+      review_route: 'Legacy: при редактировании этой строки меняется путь к старой странице обзора.',
       review_title: 'При редактировании этой строки меняется заголовок связанного обзора товара.',
       review_preview: 'При редактировании этой строки меняется короткое превью обзора, которое видно в карточке или блоке Medical Review.',
       review_link_label: 'При редактировании этой строки меняется подпись ссылки на обзор.',
@@ -11322,7 +11412,7 @@
       'data-editorial-media-save': 'Сохраняет изображение страницы или карточки в безопасный media path.',
       'data-editorial-queue-validate': 'Проверяет payload страницы: обязательные поля, route, SEO и безопасный target_path.',
       'data-editorial-publish': 'Сохраняет страницу в GitHub без автоматического запуска Actions.',
-      'data-github-static-deploy': 'Запускает один batch build/deploy для всех накопленных правок выбранного домена. Если новых правок нет, админка спросит подтверждение и не потратит Actions случайно.',
+      'data-github-static-deploy': 'Готовит один batch release для всех накопленных правок выбранного домена через server builder. Если новых правок нет, админка спросит подтверждение и не запустит лишний release.',
       'data-editorial-archive-submit': 'Архивирует выбранную страницу или карточку после проверки прав и target_path.',
       'data-product-card-media-save': 'Сохраняет фото товара для карточки и страницы продукта.',
       'data-product-card-validate': 'Проверяет карточку товара перед сохранением.',
@@ -11371,7 +11461,7 @@
       'Сайты': 'Без выбранного домена показывает общую статистику: сколько live-страниц есть в панели и сколько сайтов зарегистрировано.',
       'Сайт': 'После выбора домена показывает статистику конкретного сайта: технические страницы, карточки товаров и общее число live-страниц.',
       'Версия': 'Версия сборщика админки и схемы панели.',
-      'Лимиты': 'Показывает главный расходуемый лимит GitHub Actions и контрольный лимит Cloudflare Workers для CMS API.'
+      'Лимиты': 'Показывает главный контролируемый лимит Cloudflare runtime и, если доступно, архивную статистику Actions без использования Actions как рабочего пути.'
     };
 
     document.querySelectorAll('.metric').forEach((metric) => {
@@ -11390,7 +11480,7 @@
     const cardHelp = [
       ['.page-row', 'Карточка страницы показывает route, тип, статус и модули. Ссылка «Редактировать» переносит выбранную страницу в редактор публикаций.'],
       ['.module-card', 'Карточка модуля описывает, где модуль можно использовать и какие данные/SEO hooks он добавляет в страницу.'],
-      ['.workflow-card', 'Legacy-команда draft workflow. Используй только если обычная редактура через Contents API не подходит.'],
+      ['.workflow-card', 'Legacy-команда draft payload. Используй только если обычная редактура через Worker runtime не подходит.'],
       ['.workflow-page', 'Legacy-сводка по странице: source JSON, draft и preview paths. Для обычной правки используй «Редактура сайта».'],
       ['.site-fleet-card', 'Профиль сайта: домен, GEO, root locale, deploy target и secret_refs. Выбор профиля определяет, с каким доменом работает CMS.'],
       ['.admin-page-card', 'Быстрый переход к странице/разделу админки. Сам по себе не меняет сайт.']
@@ -12035,9 +12125,11 @@
       let deployResult = null;
 
       if (deployAfter && hostingProvider(activeSiteProfile()) === 'static_vps') {
-        deployResult = await githubDispatchWorkflow(config.deploy_workflow_id || 'deploy.yml', {
-          target: 'production'
-        }, config.deploy_actions_url || '');
+        deployResult = {
+          ok: false,
+          action: 'builder_release_required',
+          issues: ['Media uploaded to GitHub Contents, but static VPS deploy must use server builder/SSH runtime; GitHub Actions are archived.']
+        };
       }
 
       return {
@@ -12054,8 +12146,8 @@
         },
         written_paths: [relativePath],
         warnings: deployAfter && hostingProvider(activeSiteProfile()) === 'static_vps'
-          ? ['Media uploaded to GitHub; static VPS deploy workflow was requested.']
-          : (deployAfter ? ['Media uploaded to GitHub. Cloudflare Pages release must be built by the Ubuntu builder; deploy.yml was not dispatched.'] : [])
+          ? ['Media uploaded to GitHub; static VPS deploy requires server builder/SSH runtime.']
+          : (deployAfter ? ['Media uploaded to GitHub. Cloudflare Pages release must be built by the Ubuntu builder; GitHub Actions were not dispatched.'] : [])
       };
     } catch (error) {
       return {
@@ -12394,7 +12486,7 @@
     } else if (contentType === 'article') {
       crumbs.push({ title: 'Guides', route: '/guides/' });
     } else if (contentType === 'review') {
-      crumbs.push({ title: 'Reviews', route: '/obzory/' });
+      crumbs.push({ title: 'Гайды и статьи', route: '/guides/' });
     }
 
     crumbs.push({ title: title || 'Untitled page', route });
@@ -12432,7 +12524,7 @@
       route,
       page_type: pageType,
       status: 'published',
-      locale: 'bg-BG',
+      locale: medGenLocaleForActiveSite().replace('_', '-'),
       locale_folder: '',
       title,
       updated_at: new Date().toISOString(),
@@ -12509,6 +12601,9 @@
     props.price = fields.price_range || props.price || '';
     props.seller_label = fields.buy_button || props.seller_label || 'Buy';
     props.seller_url = fields.buy_url || props.seller_url || '#';
+    props.key_component = fields.key_component || props.key_component || '';
+    props.component_article_route = fields.component_article_route || props.component_article_route || '';
+    props.evidence_cta_label = fields.evidence_cta_label || props.evidence_cta_label || 'Read evidence';
     props.review_cta_label = fields.review_cta_label || props.review_cta_label || '';
     props.review_route = fields.review_route || props.review_route || '';
     props.review_title = fields.review_title || props.review_title || '';
@@ -12563,7 +12658,7 @@
     props.name = fields.author_name || fields.title || page.title || props.name || '';
     props.role = fields.role || props.role || '';
     props.bio = fields.bio || fields.description || props.bio || '';
-    props.reviews_route = fields.reviews_route || props.reviews_route || '/obzory/';
+    props.reviews_route = fields.reviews_route || props.reviews_route || '/guides/';
     props.social_links = fields.social_links ? parsePipeRows(fields.social_links, ['label', 'url']) : (props.social_links || []);
 
     if (image) {
@@ -12779,8 +12874,6 @@
   }
 
   async function githubDispatchStaticDeploy(statusSetter, outputSetter) {
-    const config = readGithubConfig();
-
     if (!requireActiveSiteContext(statusSetter, outputSetter)) {
       return siteContextError();
     }
@@ -12800,21 +12893,13 @@
       }
     }
 
-    if (!githubToken()) {
-      const result = { ok: false, issues: ['GitHub token не подключен.'] };
-      outputSetter(result);
-      statusSetter('Deploy не запущен: token не подключен.');
-      return result;
-    }
-
-    statusSetter('Запускаю отдельный build/deploy workflow...');
-    const result = await githubDispatchWorkflow(config.deploy_workflow_id || 'deploy.yml', {
-      target: 'production',
-      verification_mode: 'content_fast'
-    }, config.deploy_actions_url || '');
-
+    const result = {
+      ok: false,
+      action: 'builder_release_required',
+      issues: ['Для static_vps legacy-сайтов GitHub Actions больше не являются production/fallback path. Нужен server builder или approved SSH mirror runtime.']
+    };
     outputSetter(result);
-    statusSetter(result.ok ? 'Build/deploy workflow запущен. Это единственный Actions-этап после пачки сохранений.' : 'Build/deploy workflow не запущен.');
+    statusSetter('Build/deploy через GitHub Actions отключен; используйте server builder release.');
 
     return result;
   }
@@ -13624,7 +13709,7 @@
     const slug = normalizeSlug(slugInput && slugInput.value ? slugInput.value : title);
     const route = mode === 'edit' && selectedPage && selectedPage.route
       ? selectedPage.route
-      : replacePlaceholders(preset.route_template || '/bady/{{slug}}/', { '{{slug}}': slug });
+      : (productRouteForSlug(slug, medGenLocaleForActiveSite()) || replacePlaceholders(preset.route_template || '/obzory/{{slug}}/', { '{{slug}}': slug }));
     const fields = { title };
     const mediaPath = byId('admin-product-card-media-path') ? byId('admin-product-card-media-path').value.trim() : '';
     const mediaAlt = byId('admin-product-card-media-alt') ? byId('admin-product-card-media-alt').value.trim() : '';
@@ -15508,11 +15593,11 @@
         };
         renderAdminUsersList({ users: githubRoleUsers() }, runtime);
         populateAdminUserForm(user, runtime);
-        setRolePermissionsStatus('GitHub-профиль отправлен в Actions. После workflow обновится Pages-админка.');
+        setRolePermissionsStatus('GitHub-профиль отправлен в runtime/backup path. Actions не запускаются.');
         setStatusBusy('admin-role-permissions-status', false);
         return;
       } catch (error) {
-        setRolePermissionsStatus('GitHub Actions недоступен: ' + (error && error.message ? error.message : 'network error'));
+        setRolePermissionsStatus('Runtime/backup path недоступен: ' + (error && error.message ? error.message : 'network error'));
         setStatusBusy('admin-role-permissions-status', false);
         return;
       }
@@ -15851,7 +15936,7 @@
       }
     }
 
-    setAgentKeyStatus('Отправляю agent API key в GitHub Actions...');
+    setAgentKeyStatus('Отправляю agent API key в runtime/backup path без Actions...');
     setStatusBusy('admin-agent-key-status', true);
 
     try {
@@ -15873,17 +15958,17 @@
         apiKey.value = '';
       }
       setGeneratedAgentKeyPreview('');
-      setAgentKeyStatus('Agent API key отправлен в Actions. Сырой ключ не сохранен в bootstrap; используйте его только в хранилище агента.');
+      setAgentKeyStatus('Agent API key отправлен в runtime/backup path. Сырой ключ не сохранен в bootstrap; используйте его только в хранилище агента.');
       setStatusBusy('admin-agent-key-status', false);
     } catch (error) {
-      setAgentKeyStatus('GitHub Actions недоступен: ' + (error && error.message ? error.message : 'network error'));
+      setAgentKeyStatus('Runtime/backup path недоступен: ' + (error && error.message ? error.message : 'network error'));
       setStatusBusy('admin-agent-key-status', false);
     }
   }
 
   async function revokeAgentKey(name) {
     if (!isGithubMode()) {
-      setAgentKeyStatus('Отключение agent API ключей сейчас выполняется через GitHub Pages админку и Actions.');
+      setAgentKeyStatus('Отключение agent API ключей выполняется через runtime/backup path; GitHub Actions не используются.');
       return;
     }
 
@@ -15913,7 +15998,7 @@
       setAgentKeyStatus('Agent API key отправлен на отключение.');
       setStatusBusy('admin-agent-key-status', false);
     } catch (error) {
-      setAgentKeyStatus('GitHub Actions недоступен: ' + (error && error.message ? error.message : 'network error'));
+      setAgentKeyStatus('Runtime/backup path недоступен: ' + (error && error.message ? error.message : 'network error'));
       setStatusBusy('admin-agent-key-status', false);
     }
   }
@@ -16020,7 +16105,7 @@
         setStatusBusy('admin-role-permissions-status', false);
         return;
       } catch (error) {
-        setRolePermissionsStatus('GitHub Actions недоступен: ' + (error && error.message ? error.message : 'network error'));
+        setRolePermissionsStatus('Runtime/backup path недоступен: ' + (error && error.message ? error.message : 'network error'));
         setStatusBusy('admin-role-permissions-status', false);
         return;
       }
@@ -16391,7 +16476,7 @@
       const payload = await readResponseJson(response);
 
       if (!response.ok) {
-        return { ok: false, message: 'GitHub token распознан как ' + (login || 'unknown') + ', но не имеет доступа к ' + repository + ': ' + (payload.message || 'проверьте Contents/Actions permissions и доступ к репозиторию.') };
+        return { ok: false, message: 'GitHub token распознан как ' + (login || 'unknown') + ', но не имеет доступа к ' + repository + ': ' + (payload.message || 'проверьте Contents permissions и доступ к репозиторию.') };
       }
 
       const actor = applyGithubActor(login);
@@ -16408,10 +16493,33 @@
     }
   }
 
+  function archivedActionsResponse(action, workflow, command) {
+    return {
+      ok: false,
+      action: 'archived_restore_kit_disabled',
+      command: command || '',
+      workflow: workflow || '',
+      issues: [
+        'GitHub Actions отключены как рабочий путь. Нормальная операция должна идти через Cloudflare Worker/D1/R2/KV и server builder.',
+        'Emergency/migration restore kit хранится в docs/github-actions-backup/README.md и включается только вручную.'
+      ],
+      data: {
+        restore_kit: 'docs/github-actions-backup/README.md',
+        normal_path: 'worker_runtime_builder_direct_upload'
+      }
+    };
+  }
+
+  function githubActionsArchived() {
+    const config = readGithubConfig();
+
+    return String(config.github_actions_status || '') === 'archived_restore_kit';
+  }
+
   async function githubDispatchCommand(command, payload, dryRun) {
     const config = readGithubConfig();
     const repository = config.repository || '';
-    const workflow = config.workflow_id || config.workflow || 'admin-command.yml';
+    const workflow = config.workflow_id || config.workflow || 'archived:admin-command.yml';
     const branchInput = document.querySelector('[data-github-branch]');
     const deployInput = document.querySelector('[data-github-deploy-after]');
     const ref = branchInput && branchInput.value ? branchInput.value.trim() : (config.branch || 'main');
@@ -16433,6 +16541,10 @@
         ok: false,
         issues: ['GitHub token не подключен. Подключите token в верхнем блоке GitHub доступа.']
       };
+    }
+
+    if (githubActionsArchived()) {
+      return archivedActionsResponse('github_workflow_dispatch', workflow, command);
     }
 
     try {
@@ -16458,7 +16570,7 @@
             deploy_static_vps: deployStaticVps,
             actions_url: actionsUrl
           },
-          warnings: ['GitHub принял команду асинхронно. Откройте Actions и дождитесь завершения workflow.']
+          warnings: ['GitHub принял команду асинхронно. Этот путь допустим только после ручного restore kit.']
         };
       }
 
@@ -16471,7 +16583,7 @@
           field: 'github_actions',
           code: 'dispatch_failed',
           human: responsePayload.message || 'GitHub workflow_dispatch failed.',
-          ai_hint: 'Check token permissions: Actions write, Contents write, workflow file name, and branch.'
+          ai_hint: 'Normal CMX operations must use Worker/runtime builder. If this is emergency restore, check workflow file name and branch.'
         }],
         data: responsePayload
       };
@@ -16503,6 +16615,10 @@
       };
     }
 
+    if (githubActionsArchived()) {
+      return archivedActionsResponse('github_workflow_dispatch', workflow, '');
+    }
+
     try {
       const response = await fetch(githubApiUrl('/repos/' + repository + '/actions/workflows/' + workflow + '/dispatches'), {
         method: 'POST',
@@ -16523,7 +16639,7 @@
             inputs: normalizedInputs,
             actions_url: actionsUrl || ('https://github.com/' + repository + '/actions/workflows/' + workflow)
           },
-          warnings: ['GitHub принял workflow асинхронно. Дождитесь завершения Actions перед следующим шагом.']
+          warnings: ['GitHub принял workflow асинхронно. Этот путь допустим только после ручного restore kit.']
         };
       }
 
@@ -16536,7 +16652,7 @@
           field: 'github_actions',
           code: 'dispatch_failed',
           human: responsePayload.message || 'GitHub workflow_dispatch failed.',
-          ai_hint: 'Check token permissions: Actions write, workflow file name, branch, and environment secrets.'
+          ai_hint: 'Normal CMX operations must use Worker/runtime builder. If this is emergency restore, check workflow file name, branch, and secret refs.'
         }],
         data: responsePayload
       };
