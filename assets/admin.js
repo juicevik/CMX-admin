@@ -79,9 +79,7 @@
     config: null,
     connected: false,
     actorLogin: '',
-    actorProfile: null,
-    rateLimitMessage: 'Act n/a · CF Workers 100k/day',
-    rateLimitVisible: false
+    actorProfile: null
   };
   const adminThemeStorageKey = 'cms.admin.theme';
   const activeSiteStoragePrefix = 'cms.active.site.';
@@ -421,23 +419,6 @@
     }
   }
 
-  function setGithubRateLimit(message, visible) {
-    const panels = document.querySelectorAll('[data-github-rate-limit]');
-    const values = document.querySelectorAll('[data-github-rate-limit-value]');
-
-    githubState.rateLimitMessage = message;
-    githubState.rateLimitVisible = visible !== false;
-
-    values.forEach((value) => {
-      value.textContent = message;
-    });
-
-    panels.forEach((panel) => {
-      panel.hidden = false;
-      panel.dataset.rateState = visible === false ? 'pending' : 'ready';
-    });
-  }
-
   async function fetchGithubJson(path) {
     const response = await fetch(githubApiUrl(path), {
       method: 'GET',
@@ -447,338 +428,6 @@
 
     return { response, payload };
   }
-
-  function formatMinutes(value) {
-    const minutes = Math.max(0, Math.round(Number(value) || 0));
-
-    return minutes + 'м';
-  }
-
-  function actionsBillingLabel(payload) {
-    const used = Number(payload && payload.total_minutes_used ? payload.total_minutes_used : 0);
-    const included = Number(payload && payload.included_minutes ? payload.included_minutes : 0);
-
-    if (included > 0) {
-      return 'Act ' + formatMinutes(used) + '/' + formatMinutes(included);
-    }
-
-    return 'Act ' + formatMinutes(used);
-  }
-
-  function actionsBillingIssue(response, payload) {
-    const message = String(payload && payload.message ? payload.message : '').toLowerCase();
-
-    if (response && (response.status === 401 || response.status === 403 || response.status === 404) && message.includes('user') && message.includes('scope')) {
-      return 'Act нужен user';
-    }
-
-    if (response && response.status === 404) {
-      return 'Act n/a';
-    }
-
-    return '';
-  }
-
-  function monthStartDate() {
-    const now = new Date();
-
-    return new Date(now.getFullYear(), now.getMonth(), 1);
-  }
-
-  function monthStartIsoDate() {
-    return monthStartDate().toISOString().slice(0, 10);
-  }
-
-  function parseGithubRepository(repository) {
-    const parts = String(repository || '').split('/');
-
-    return {
-      owner: parts[0] || '',
-      repo: parts[1] || ''
-    };
-  }
-
-  function githubActionUsageRepositories() {
-    const config = readGithubConfig();
-    const configured = Array.isArray(config.actions_usage_repositories)
-      ? config.actions_usage_repositories
-      : [];
-    const fallbackRepository = config && config.repository ? String(config.repository) : '';
-    const repositories = configured.length
-      ? configured
-      : [{ repository: fallbackRepository, label: fallbackRepository, billable: true, quota_minutes: 2000 }];
-    const seen = new Set();
-
-    return repositories
-      .map((item) => {
-        const repository = String(item && item.repository ? item.repository : '').trim();
-        const parsed = parseGithubRepository(repository);
-
-        return {
-          repository,
-          owner: parsed.owner,
-          repo: parsed.repo,
-          label: String(item && item.label ? item.label : (parsed.repo || repository)),
-          billable: !(item && item.billable === false),
-          quotaMinutes: Number(item && item.quota_minutes ? item.quota_minutes : 0)
-        };
-      })
-      .filter((item) => {
-        const key = item.repository.toLowerCase();
-
-        if (!item.owner || !item.repo || seen.has(key)) {
-          return false;
-        }
-
-        seen.add(key);
-        return true;
-      });
-  }
-
-  function minutesBetween(startedAt, completedAt, rounded) {
-    const started = startedAt ? new Date(startedAt).getTime() : 0;
-    const completed = completedAt ? new Date(completedAt).getTime() : 0;
-
-    if (!started || !completed || completed <= started) {
-      return 0;
-    }
-
-    const minutes = (completed - started) / 60000;
-
-    return rounded ? Math.max(1, Math.ceil(minutes)) : minutes;
-  }
-
-  function runStartedAt(run) {
-    return run && (run.run_started_at || run.created_at) ? (run.run_started_at || run.created_at) : '';
-  }
-
-  function runCompletedAt(run) {
-    return run && (run.updated_at || run.completed_at) ? (run.updated_at || run.completed_at) : '';
-  }
-
-  function actionRunsPath(repository, page) {
-    const owner = repository && repository.owner ? String(repository.owner) : '';
-    const repo = repository && repository.repo ? String(repository.repo) : '';
-    const query = [
-      'per_page=100',
-      'page=' + encodeURIComponent(String(page || 1)),
-      'created=%3E%3D' + encodeURIComponent(monthStartIsoDate())
-    ].join('&');
-
-    return '/repos/' + encodeURIComponent(owner) + '/' + encodeURIComponent(repo) + '/actions/runs?' + query;
-  }
-
-  function actionRunJobsPath(repository, runId, page) {
-    const owner = repository && repository.owner ? String(repository.owner) : '';
-    const repo = repository && repository.repo ? String(repository.repo) : '';
-
-    return '/repos/' + encodeURIComponent(owner) + '/' + encodeURIComponent(repo) + '/actions/runs/' + encodeURIComponent(String(runId)) + '/jobs?per_page=100&page=' + encodeURIComponent(String(page || 1));
-  }
-
-  async function fetchCurrentMonthActionRuns(repository) {
-    const runs = [];
-    let page = 1;
-
-    while (page <= 5) {
-      const result = await fetchGithubJson(actionRunsPath(repository, page));
-
-      if (!result.response.ok || !result.payload || !Array.isArray(result.payload.workflow_runs)) {
-        return { ok: false, issue: 'runs_unavailable', runs };
-      }
-
-      runs.push(...result.payload.workflow_runs);
-
-      if (result.payload.workflow_runs.length < 100) {
-        break;
-      }
-
-      page += 1;
-    }
-
-    return { ok: true, runs };
-  }
-
-  async function fetchRunRoundedJobMinutes(repository, run) {
-    if (!run || !run.id) {
-      return { ok: false, minutes: 0 };
-    }
-
-    let minutes = 0;
-    let page = 1;
-
-    while (page <= 3) {
-      const result = await fetchGithubJson(actionRunJobsPath(repository, run.id, page));
-
-      if (!result.response.ok || !result.payload || !Array.isArray(result.payload.jobs)) {
-        return { ok: false, minutes: 0 };
-      }
-
-      result.payload.jobs.forEach((job) => {
-        minutes += minutesBetween(job.started_at, job.completed_at, true);
-      });
-
-      if (result.payload.jobs.length < 100) {
-        break;
-      }
-
-      page += 1;
-    }
-
-    return { ok: true, minutes };
-  }
-
-  async function mapWithConcurrency(items, limit, mapper) {
-    const results = new Array(items.length);
-    let cursor = 0;
-
-    async function worker() {
-      while (cursor < items.length) {
-        const index = cursor;
-        cursor += 1;
-        results[index] = await mapper(items[index], index);
-      }
-    }
-
-    const workers = [];
-    const count = Math.min(Math.max(1, limit), items.length);
-
-    for (let index = 0; index < count; index += 1) {
-      workers.push(worker());
-    }
-
-    await Promise.all(workers);
-
-    return results;
-  }
-
-  async function loadGithubActionsRepoUsage(repository) {
-    const runsResult = await fetchCurrentMonthActionRuns(repository);
-
-    if (!runsResult.ok) {
-      return { ok: false, minutes: 0, runs: 0, billable: repository.billable, quotaMinutes: repository.quotaMinutes };
-    }
-
-    const runs = runsResult.runs.filter((run) => {
-      const started = runStartedAt(run);
-
-      return started && new Date(started) >= monthStartDate();
-    });
-
-    if (!runs.length) {
-      return { ok: true, minutes: 0, runs: 0, billable: repository.billable, quotaMinutes: repository.quotaMinutes };
-    }
-
-    const jobResults = await mapWithConcurrency(runs, 4, (run) => fetchRunRoundedJobMinutes(repository, run));
-    const jobMinutes = jobResults.reduce((sum, result) => sum + (result && result.ok ? result.minutes : 0), 0);
-
-    if (jobMinutes > 0) {
-      return { ok: true, minutes: jobMinutes, runs: runs.length, billable: repository.billable, quotaMinutes: repository.quotaMinutes };
-    }
-
-    const runMinutes = runs.reduce((sum, run) => sum + minutesBetween(runStartedAt(run), runCompletedAt(run), true), 0);
-
-    return { ok: true, minutes: runMinutes, runs: runs.length, billable: repository.billable, quotaMinutes: repository.quotaMinutes, approximate: true };
-  }
-
-  function actionsUsageLabel(metrics) {
-    const billableMinutes = metrics.reduce((sum, item) => sum + (item.billable ? item.minutes : 0), 0);
-    const publicMinutes = metrics.reduce((sum, item) => sum + (!item.billable ? item.minutes : 0), 0);
-    const totalRuns = metrics.reduce((sum, item) => sum + item.runs, 0);
-    const quota = metrics.reduce((sum, item) => sum + (item.billable ? item.quotaMinutes : 0), 0) || 2000;
-    const prefix = metrics.some((item) => item.approximate) ? '~' : '';
-    const parts = ['Act ' + prefix + Math.round(billableMinutes) + '/' + quota];
-
-    if (publicMinutes > 0) {
-      parts.push('pub ' + Math.round(publicMinutes));
-    }
-
-    if (totalRuns > 0) {
-      parts.push(totalRuns + 'r');
-    }
-
-    return parts.join(' · ');
-  }
-
-  async function loadGithubActionsConfiguredUsage() {
-    const repositories = githubActionUsageRepositories();
-
-    if (!repositories.length) {
-      return 'Act repo n/a';
-    }
-
-    const metrics = await mapWithConcurrency(repositories, 2, loadGithubActionsRepoUsage);
-    const available = metrics.filter((item) => item && item.ok);
-
-    if (!available.length) {
-      return 'Act repo n/a';
-    }
-
-    return actionsUsageLabel(available);
-  }
-
-  async function fetchActionsBillingForUser(login) {
-    if (!login) {
-      return { ok: false, label: 'Act n/a' };
-    }
-
-    try {
-      const billing = await fetchGithubJson('/users/' + encodeURIComponent(login) + '/settings/billing/actions');
-
-      if (billing.response.ok && billing.payload) {
-        return { ok: true, label: actionsBillingLabel(billing.payload) };
-      }
-
-      return { ok: false, label: actionsBillingIssue(billing.response, billing.payload) || 'Act n/a' };
-    } catch (error) {
-      return { ok: false, label: 'Act n/a' };
-    }
-  }
-
-  async function fetchActionsBillingForOrg(owner) {
-    if (!owner) {
-      return { ok: false, label: 'Act n/a' };
-    }
-
-    try {
-      const billing = await fetchGithubJson('/orgs/' + encodeURIComponent(owner) + '/settings/billing/actions');
-
-      if (billing.response.ok && billing.payload) {
-        return { ok: true, label: actionsBillingLabel(billing.payload) };
-      }
-
-      return { ok: false, label: actionsBillingIssue(billing.response, billing.payload) || 'Act n/a' };
-    } catch (error) {
-      return { ok: false, label: 'Act n/a' };
-    }
-  }
-
-  async function loadGithubActionsUsage() {
-    const config = readGithubConfig();
-    const owner = config && config.owner ? String(config.owner) : '';
-    const actor = githubState.actorLogin ? String(githubState.actorLogin) : '';
-    const ownerBilling = await fetchActionsBillingForUser(owner);
-
-    if (ownerBilling.ok || ownerBilling.label === 'Act нужен user') {
-      return ownerBilling.label;
-    }
-
-    if (actor && actor.toLowerCase() !== owner.toLowerCase()) {
-      const actorBilling = await fetchActionsBillingForUser(actor);
-
-      if (actorBilling.ok || actorBilling.label === 'Act нужен user') {
-        return actorBilling.label;
-      }
-    }
-
-    const orgBilling = await fetchActionsBillingForOrg(owner);
-
-    if (orgBilling.ok || orgBilling.label === 'Act нужен user') {
-      return orgBilling.label;
-    }
-
-    return loadGithubActionsConfiguredUsage();
-  }
-
   function githubToken() {
     return githubState.token || sessionStorage.getItem(githubSessionKey()) || '';
   }
@@ -1506,32 +1155,6 @@
     };
   }
 
-  async function loadGithubRateLimit() {
-    if (!githubToken()) {
-      setGithubRateLimit('Act n/a · CF Workers 100k/day', false);
-      return;
-    }
-
-    try {
-      const { response, payload } = await fetchGithubJson('/rate_limit');
-
-      if (!response.ok || !payload || !payload.resources) {
-        setGithubRateLimit('Act n/a · CF Workers 100k/day', true);
-        return;
-      }
-
-      const actionsLabel = await loadGithubActionsUsage();
-      const parts = [
-        actionsLabel,
-        'CF Workers 100k/day'
-      ];
-
-      setGithubRateLimit(parts.join(' · '), true);
-    } catch (error) {
-      setGithubRateLimit('Act n/a · CF Workers 100k/day', true);
-    }
-  }
-
   const editableRoleCapabilities = ['write', 'publish', 'config', 'media', 'archive', 'site_rebrand', 'deploy'];
 
   function roleDefaultCapabilities(role) {
@@ -1939,12 +1562,24 @@
       status: document.querySelector('[data-builder-runtime-status]'),
       save: document.querySelector('[data-builder-runtime-save]'),
       check: document.querySelector('[data-builder-runtime-check-secrets]'),
-      clear: document.querySelector('[data-builder-runtime-clear-secret-values]')
+      clear: document.querySelector('[data-builder-runtime-clear-secret-values]'),
+      migrationHost: document.querySelector('[data-builder-migration-host]'),
+      migrationRun: document.querySelector('[data-builder-migration-run]'),
+      migrationStatus: document.querySelector('[data-builder-migration-status]')
     };
   }
 
   function setBuilderRuntimeStatus(message) {
     const status = builderRuntimeElements().status;
+
+    if (status) {
+      status.value = String(message || '');
+      status.textContent = String(message || '');
+    }
+  }
+
+  function setBuilderMigrationStatus(message) {
+    const status = builderRuntimeElements().migrationStatus;
 
     if (status) {
       status.value = String(message || '');
@@ -1971,6 +1606,22 @@
     return refs;
   }
 
+  function setBuilderRuntimeFieldValue(key, value) {
+    const field = document.querySelector('[data-builder-runtime-field="' + key + '"]');
+
+    if (field instanceof HTMLInputElement) {
+      field.value = String(value || '');
+    }
+  }
+
+  function setBuilderSecretValue(key, value) {
+    const field = document.querySelector('[data-builder-secret-value="' + key + '"]');
+
+    if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) {
+      field.value = String(value || '');
+    }
+  }
+
   function builderRuntimeConfigFromForm() {
     const defaults = defaultBuilderRuntimeConfig();
     const elements = builderRuntimeElements();
@@ -1995,6 +1646,36 @@
       },
       updated_at: new Date().toISOString()
     };
+  }
+
+  function builderRuntimeConfigForMigration(host) {
+    const elements = builderRuntimeElements();
+
+    if (elements.serverToggle instanceof HTMLInputElement) {
+      elements.serverToggle.checked = true;
+    }
+
+    setBuilderSecretValue('host', host);
+    syncBuilderRuntimeModeFields();
+
+    const runtime = builderRuntimeConfigFromForm();
+    const server = runtime.server && typeof runtime.server === 'object' ? runtime.server : {};
+    const refs = Object.assign({}, defaultBuilderSecretRefs(), server.secret_refs && typeof server.secret_refs === 'object' ? server.secret_refs : {});
+
+    runtime.mode = 'server';
+    runtime.server = { secret_refs: refs };
+    runtime.migration = {
+      version: 'cmx-builder-migration-v1',
+      source: 'admin_one_click_builder_migration',
+      target_host_ref: refs.host || 'BUILDER_HOST',
+      updated_at: new Date().toISOString()
+    };
+
+    setBuilderRuntimeFieldValue('environment', runtime.environment || 'cmx-builder');
+    setBuilderRuntimeFieldValue('worker_id', runtime.worker_id || 'cmx-builder-1');
+    setBuilderRuntimeFieldValue('repo_path', runtime.repo_path || '/opt/cmx/current');
+
+    return runtime;
   }
 
   function populateBuilderRuntimeForm(config) {
@@ -2170,6 +1851,87 @@
     };
   }
 
+  async function persistBuilderRuntimeConfig(runtime, message) {
+    const current = adminState.builderRuntimeSha ? { ok: true, sha: adminState.builderRuntimeSha } : await githubReadTextFile('config/builder-runtime.json');
+    const saved = await githubSaveJsonFile(
+      'config/builder-runtime.json',
+      runtime,
+      message || 'Save builder runtime config',
+      current.ok ? current.sha : ''
+    );
+
+    if (saved.ok) {
+      adminState.builderRuntime = runtime;
+      adminState.builderRuntimeSha = saved.data && saved.data.commit ? '' : adminState.builderRuntimeSha;
+    }
+
+    return saved;
+  }
+
+  async function migrateBuilderRuntimeServer() {
+    const elements = builderRuntimeElements();
+    const host = elements.migrationHost instanceof HTMLInputElement
+      ? String(elements.migrationHost.value || '').trim()
+      : '';
+
+    if (!isGithubMode()) {
+      setBuilderMigrationStatus('Миграция builder доступна в GitHub Pages admin.');
+      return;
+    }
+
+    if (!githubToken()) {
+      setBuilderMigrationStatus('GitHub token не подключен.');
+      return;
+    }
+
+    if (!host) {
+      setBuilderMigrationStatus('Укажите новый адрес builder-сервера.');
+      return;
+    }
+
+    if (!window.confirm('Мигрировать builder на новый сервер ' + host + '? Админка обновит encrypted host secret и сохранит builder config без raw secrets в репозитории.')) {
+      setBuilderMigrationStatus('Миграция builder отменена.');
+      return;
+    }
+
+    const runtime = builderRuntimeConfigForMigration(host);
+
+    setBuilderMigrationStatus('Шифрую новый host secret для GitHub Environment ' + runtime.environment + '...');
+    setBuilderRuntimeStatus('Миграция builder: сохраняю encrypted host secret...');
+
+    const secretsResult = await saveBuilderRuntimeSecrets(runtime);
+
+    if (!secretsResult.ok) {
+      const issues = secretsResult.issues || ['unknown error'];
+      setBuilderMigrationStatus('Host secret не сохранен: ' + issues.join('; '));
+      setBuilderRuntimeStatus('Миграция builder остановлена: ' + issues.join('; '));
+      return;
+    }
+
+    setBuilderMigrationStatus('Сохраняю builder runtime config...');
+    const saved = await persistBuilderRuntimeConfig(runtime, 'Migrate builder runtime host');
+
+    if (!saved.ok) {
+      const issues = (saved.issues || saved.errors || ['unknown error']).map((item) => item && item.human ? item.human : String(item));
+      setBuilderMigrationStatus('Builder config не сохранен: ' + issues.join('; '));
+      setBuilderRuntimeStatus('Builder config не сохранен: ' + issues.join('; '));
+      return;
+    }
+
+    const check = await checkBuilderRuntimeSecrets();
+    const written = (secretsResult.written_names || []).join(', ');
+    const suffix = check && check.ok
+      ? ' Все ожидаемые secrets найдены.'
+      : ' Проверьте недостающие secrets перед следующим release.';
+
+    if (elements.migrationHost instanceof HTMLInputElement) {
+      elements.migrationHost.value = '';
+    }
+
+    setBuilderMigrationStatus('Builder переведен на новый host ref ' + (runtime.server.secret_refs.host || 'BUILDER_HOST') + (written ? ' (' + written + ')' : '') + '.' + suffix);
+    setBuilderRuntimeStatus('Builder migration сохранена. Следующий Cloudflare Pages release будет использовать обновленный builder runtime.');
+  }
+
   async function checkBuilderRuntimeSecrets() {
     const runtime = builderRuntimeConfigFromForm();
     const environment = String(runtime.environment || '').trim();
@@ -2279,21 +2041,13 @@
       return;
     }
 
-    const current = adminState.builderRuntimeSha ? { ok: true, sha: adminState.builderRuntimeSha } : await githubReadTextFile('config/builder-runtime.json');
-    const saved = await githubSaveJsonFile(
-      'config/builder-runtime.json',
-      runtime,
-      'Save builder runtime config',
-      current.ok ? current.sha : ''
-    );
+    const saved = await persistBuilderRuntimeConfig(runtime, 'Save builder runtime config');
 
     if (!saved.ok) {
       setBuilderRuntimeStatus('Builder config не сохранен: ' + ((saved.issues || saved.errors || ['unknown error']).map((item) => item && item.human ? item.human : String(item)).join('; ')));
       return;
     }
 
-    adminState.builderRuntime = runtime;
-    adminState.builderRuntimeSha = saved.data && saved.data.commit ? '' : adminState.builderRuntimeSha;
     setBuilderRuntimeStatus(secretNames.length
       ? 'Builder сохранен. Secrets записаны: ' + (secretsResult.written_names || []).join(', ') + '.'
       : 'Builder config сохранен. Secrets не менялись.');
@@ -2457,6 +2211,14 @@
     const contactEmail = String(profile.contact_email || contactEmailFromDomain(domain)).trim();
     const locale = String(profile.root_locale || '').trim();
     const title = String(profile.display_name || domain || '').trim();
+    const localBusiness = profile.local_business && typeof profile.local_business === 'object'
+      ? profile.local_business
+      : {};
+
+    const forcedSiteScopedFields = new Set([
+      'admin-medgen-locale',
+      'admin-domain-default-locale'
+    ]);
 
     [
       ['admin-medgen-site-domain', domain],
@@ -2466,6 +2228,9 @@
       ['admin-domain-name', domain],
       ['admin-domain-base-url', baseUrl],
       ['admin-domain-email', contactEmail],
+      ['admin-domain-business-name', String(localBusiness.name || '').trim()],
+      ['admin-domain-business-address', String(localBusiness.address || '').trim()],
+      ['admin-domain-business-comment', String(localBusiness.comment || '').trim()],
       ['admin-deploy-tls-email', contactEmail],
       ['admin-domain-default-locale', locale],
       ['admin-domain-supplement-prefix', siteRouteNamespace(profile, 'supplement')],
@@ -2474,7 +2239,7 @@
     ].forEach(([id, value]) => {
       const field = byId(id);
 
-      if (field && value && (!field.value || field.dataset.siteScopedAutofill === 'true')) {
+      if (field && value && (forcedSiteScopedFields.has(id) || !field.value || field.dataset.siteScopedAutofill === 'true')) {
         field.value = value;
         field.dataset.siteScopedAutofill = 'true';
       }
@@ -5630,11 +5395,12 @@
         ? task.payload
         : {};
     const medgenPayload = payload.payload && typeof payload.payload === 'object' ? payload.payload : payload;
+    const publicPayload = medGenPublicPayload(medgenPayload);
 
     return {
       task_id: String(task.task_id || ''),
-      payload: medgenPayload,
-      medgen_payload: medgenPayload,
+      payload: publicPayload,
+      medgen_payload: publicPayload,
       task: {
         task_id: task.task_id || '',
         status: task.status || '',
@@ -7150,6 +6916,11 @@
       });
     }
 
+    if (elements.migrationRun instanceof HTMLButtonElement && elements.migrationRun.dataset.builderMigrationBound !== 'true') {
+      elements.migrationRun.dataset.builderMigrationBound = 'true';
+      elements.migrationRun.addEventListener('click', () => migrateBuilderRuntimeServer());
+    }
+
     populateBuilderRuntimeForm(adminState.builderRuntime || defaultBuilderRuntimeConfig());
   }
 
@@ -7302,8 +7073,47 @@
   function setSiteFleetField(selector, value) {
     const field = document.querySelector(selector);
 
-    if (field instanceof HTMLInputElement || field instanceof HTMLSelectElement) {
+    if (field instanceof HTMLInputElement || field instanceof HTMLSelectElement || field instanceof HTMLTextAreaElement) {
       field.value = String(value || '');
+    }
+  }
+
+  function applySiteFleetLocalePreset(force) {
+    const localeField = document.querySelector('[data-site-fleet-field="root_locale"]');
+    const preset = selectedLocalePreset(localeField) || siteLocalePresetFor(localeField instanceof HTMLSelectElement || localeField instanceof HTMLInputElement ? localeField.value : '') || defaultSiteLocalePreset();
+    const market = presetMarket(preset);
+    const rootLocale = normalizeRootLocaleValue(preset.locale || '');
+
+    if (rootLocale) {
+      setSiteFleetField('[data-site-fleet-field="root_locale"]', rootLocale);
+    }
+
+    const countryField = document.querySelector('[data-site-fleet-field="geo_country"]');
+    if (market.country && countryField instanceof HTMLInputElement && (force || !countryField.value.trim())) {
+      countryField.value = String(market.country).trim().toUpperCase();
+    }
+
+    const currencyField = document.querySelector('[data-site-fleet-market-field="currency"]');
+    if (market.currency && currencyField instanceof HTMLInputElement && (force || !currencyField.value.trim())) {
+      currencyField.value = String(market.currency).trim().toUpperCase();
+    }
+
+    const routeField = document.querySelector('[data-site-fleet-route-prefix="supplement"]');
+    if (routeField instanceof HTMLInputElement) {
+      const currentValue = routeField.value.trim();
+      if (!currentValue || (force && knownProductRoutePrefix(currentValue))) {
+        routeField.value = productRoutePrefixForLocale(rootLocale || 'en_US');
+      }
+    }
+
+    const authorField = document.querySelector('[data-site-fleet-route-prefix="author"]');
+    if (authorField instanceof HTMLInputElement && !authorField.value.trim()) {
+      authorField.value = '/experts/';
+    }
+
+    const articleField = document.querySelector('[data-site-fleet-route-prefix="article"]');
+    if (articleField instanceof HTMLInputElement && !articleField.value.trim()) {
+      articleField.value = '/guides/';
     }
   }
 
@@ -7313,13 +7123,15 @@
     }
 
     if (!profile) {
-      document.querySelectorAll('[data-site-fleet-field], [data-site-fleet-market-field], [data-site-fleet-route-prefix], [data-site-fleet-deploy-field], [data-site-fleet-cloudflare-field], [data-site-fleet-secret-ref]').forEach((field) => {
-        if (field instanceof HTMLInputElement || field instanceof HTMLSelectElement) {
+      document.querySelectorAll('[data-site-fleet-field], [data-site-fleet-market-field], [data-site-fleet-route-prefix], [data-site-fleet-deploy-field], [data-site-fleet-cloudflare-field], [data-site-fleet-secret-ref], [data-site-fleet-local-business-field]').forEach((field) => {
+        if (field instanceof HTMLInputElement || field instanceof HTMLSelectElement || field instanceof HTMLTextAreaElement) {
           field.value = '';
         }
       });
       setSiteFleetField('[data-site-fleet-medgen-field="enabled"]', 'true');
       setSiteFleetField('[data-site-fleet-deploy-field="provider"]', 'cloudflare_pages');
+      setSiteFleetField('[data-site-fleet-field="root_locale"]', defaultSiteLocalePreset().locale || 'en_US');
+      applySiteFleetLocalePreset(true);
       Object.entries(defaultDeploySecretRefs()).forEach(([key, value]) => {
         setSiteFleetField('[data-site-fleet-secret-ref="' + key + '"]', value);
       });
@@ -7333,6 +7145,12 @@
     setSiteFleetField('[data-site-fleet-field="base_url"]', profile.base_url || '');
     setSiteFleetField('[data-site-fleet-field="contact_email"]', profile.contact_email || contactEmailFromDomain(profile.domain || ''));
     setSiteFleetField('[data-site-fleet-field="root_locale"]', profile.root_locale || '');
+    const localBusiness = profile.local_business && typeof profile.local_business === 'object'
+      ? profile.local_business
+      : {};
+    setSiteFleetField('[data-site-fleet-local-business-field="name"]', localBusiness.name || '');
+    setSiteFleetField('[data-site-fleet-local-business-field="address"]', localBusiness.address || '');
+    setSiteFleetField('[data-site-fleet-local-business-field="comment"]', localBusiness.comment || '');
     setSiteFleetField('[data-site-fleet-field="geo_country"]', profile.geo_country || '');
     setSiteFleetField('[data-site-fleet-field="status"]', profile.status || 'draft');
     setSiteFleetField('[data-site-fleet-market-field="currency"]', profile.market && profile.market.currency ? profile.market.currency : 'USD');
@@ -7357,6 +7175,7 @@
       setSiteFleetField('[data-site-fleet-secret-ref="' + key + '"]', value);
     });
     setSiteFleetField('[data-site-fleet-medgen-field="enabled"]', profile.medgen_profile && profile.medgen_profile.enabled === false ? 'false' : 'true');
+    applySiteFleetLocalePreset(false);
     syncSiteFleetHostingFields();
   }
 
@@ -7375,7 +7194,8 @@
           api_base_url: 'MEDGEN_API_PUBLIC_BASE_URL',
           api_token: 'MEDGEN_API_TOKEN'
         }
-      }
+      },
+      local_business: {}
     };
 
     document.querySelectorAll('[data-site-fleet-field]').forEach((field) => {
@@ -7386,6 +7206,8 @@
       }
     });
 
+    profile.local_business = collectLocalBusinessPayload('[data-site-fleet-local-business-field]', 'data-site-fleet-local-business-field');
+
     document.querySelectorAll('[data-site-fleet-market-field]').forEach((field) => {
       const key = field.getAttribute('data-site-fleet-market-field') || '';
 
@@ -7393,6 +7215,23 @@
         profile.market[key] = field.value.trim().toUpperCase();
       }
     });
+
+    const localeField = document.querySelector('[data-site-fleet-field="root_locale"]');
+    const preset = selectedLocalePreset(localeField) || siteLocalePresetFor(profile.root_locale || '') || defaultSiteLocalePreset();
+    const market = presetMarket(preset);
+    const rootLocale = normalizeRootLocaleValue(preset.locale || profile.root_locale || '');
+    if (rootLocale) {
+      profile.root_locale = rootLocale;
+    }
+    if (!profile.geo_country && market.country) {
+      profile.geo_country = String(market.country).trim().toUpperCase();
+    }
+    if (!profile.market.country && market.country) {
+      profile.market.country = String(market.country).trim().toUpperCase();
+    }
+    if (!profile.market.currency && market.currency) {
+      profile.market.currency = String(market.currency).trim().toUpperCase();
+    }
 
     if (profile.geo_country) {
       profile.market.country = String(profile.geo_country).trim().toUpperCase();
@@ -7814,6 +7653,9 @@
         if (!profile.base_url) {
           issues.push('base_url_required');
         }
+        if (operation !== 'archive_site' && (!profile.local_business || !String(profile.local_business.address || '').trim())) {
+          issues.push('local_business.address_required');
+        }
 
         if (operation === 'archive_site') {
           profile.status = 'archived';
@@ -7988,6 +7830,12 @@
     if (providerField && providerField.dataset.siteFleetProviderBound !== 'true') {
       providerField.dataset.siteFleetProviderBound = 'true';
       providerField.addEventListener('change', syncSiteFleetHostingFields);
+    }
+
+    const localeField = document.querySelector('[data-site-fleet-field="root_locale"]');
+    if (localeField && localeField.dataset.siteFleetLocaleBound !== 'true') {
+      localeField.dataset.siteFleetLocaleBound = 'true';
+      localeField.addEventListener('change', () => applySiteFleetLocalePreset(true));
     }
 
     syncSiteFleetHostingFields();
@@ -9248,23 +9096,6 @@
     }
   }
 
-  function setServerMaintenanceStatus(message) {
-    const status = byId('admin-server-maintenance-status');
-
-    if (status) {
-      status.value = message;
-      status.textContent = message;
-    }
-  }
-
-  function setServerMaintenanceOutput(payload) {
-    const output = byId('admin-server-maintenance-output');
-
-    if (output) {
-      output.value = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
-    }
-  }
-
   function setMedGenStatus(message) {
     const status = byId('admin-medgen-status');
 
@@ -9297,6 +9128,20 @@
     if (output) {
       output.value = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
     }
+  }
+
+  function medGenPublicPayload(payload) {
+    return JSON.parse(JSON.stringify(payload || {}, (key, value) => {
+      if (
+        typeof value === 'string'
+        && ['input_image_base64', 'example_image_base64', 'base64', 'contents_base64'].includes(key)
+        && value.length > 0
+      ) {
+        return '[base64 omitted; chars=' + value.length + ']';
+      }
+
+      return value;
+    }));
   }
 
   function collectMedGenPayload() {
@@ -9412,33 +9257,146 @@
     return '';
   }
 
-  function medGenLocaleForActiveSite() {
-    const profile = activeSiteProfile() || {};
-    const field = byId('admin-medgen-locale');
-    const raw = String(
-      profile.root_locale
-      || profile.locale
-      || profile.default_locale
-      || (field instanceof HTMLInputElement ? field.value : '')
-      || 'ru_RU'
-    ).trim().replace('-', '_');
+  function normalizeRootLocaleValue(value) {
+    const raw = String(value || '').trim().replace('-', '_');
+    const full = raw.match(/^([a-z]{2})_([A-Za-z]{2})$/);
 
-    if (/^[a-z]{2}_[A-Z]{2}$/.test(raw)) {
-      return raw;
+    if (full) {
+      return full[1].toLowerCase() + '_' + full[2].toUpperCase();
     }
 
     if (/^[a-z]{2}$/i.test(raw)) {
-      const language = raw.toLowerCase();
-      const country = String(profile.geo_country || language).trim().slice(0, 2).toUpperCase();
-
-      return language + '_' + (country || language.toUpperCase());
+      return raw.toLowerCase();
     }
 
-    return 'ru_RU';
+    return '';
+  }
+
+  function siteLocalePresets() {
+    const localization = adminState.manifest && adminState.manifest.localization
+      ? adminState.manifest.localization
+      : {};
+
+    return Array.isArray(localization.site_locale_presets) ? localization.site_locale_presets : [];
+  }
+
+  function defaultSiteLocalePreset() {
+    const localization = adminState.manifest && adminState.manifest.localization
+      ? adminState.manifest.localization
+      : {};
+    const defaultLocale = normalizeRootLocaleValue(localization.default_site_locale || 'en_US');
+
+    return siteLocalePresetFor(defaultLocale) || siteLocalePresetFor('en') || {
+      locale: 'en_US',
+      code: 'en',
+      html_locale: 'en-US',
+      market: {
+        country: 'US',
+        currency: 'USD'
+      }
+    };
+  }
+
+  function siteLocalePresetFor(locale) {
+    const normalized = normalizeRootLocaleValue(locale);
+    const presets = siteLocalePresets();
+
+    if (!normalized) {
+      return null;
+    }
+
+    return presets.find((preset) => {
+      if (!preset || typeof preset !== 'object') {
+        return false;
+      }
+
+      const presetLocale = normalizeRootLocaleValue(preset.locale || preset.root_locale || preset.html_locale || '');
+      if (presetLocale === normalized) {
+        return true;
+      }
+
+      return /^[a-z]{2}$/.test(normalized) && String(preset.code || '').toLowerCase() === normalized;
+    }) || null;
+  }
+
+  function selectedLocalePreset(field) {
+    if (!(field instanceof HTMLSelectElement)) {
+      return null;
+    }
+
+    const option = field.selectedOptions && field.selectedOptions.length > 0 ? field.selectedOptions[0] : null;
+    if (!option) {
+      return null;
+    }
+
+    const locale = normalizeRootLocaleValue(option.value || option.dataset.localeHtml || '');
+    const country = String(option.dataset.localeCountry || '').trim().toUpperCase();
+    const currency = String(option.dataset.localeCurrency || '').trim().toUpperCase();
+
+    if (!locale) {
+      return null;
+    }
+
+    return {
+      locale,
+      code: String(option.dataset.localeCode || '').trim().toLowerCase(),
+      html_locale: String(option.dataset.localeHtml || '').trim(),
+      tier: option.dataset.localeTier ? Number(option.dataset.localeTier) : null,
+      market: {
+        country,
+        currency
+      }
+    };
+  }
+
+  function presetMarket(preset) {
+    return preset && preset.market && typeof preset.market === 'object' ? preset.market : {};
+  }
+
+  function rootLocaleForSiteProfile(profile) {
+    const source = profile && typeof profile === 'object' ? profile : {};
+    const profileLocale = normalizeRootLocaleValue(source.root_locale || source.locale || source.default_locale || '');
+    const preset = siteLocalePresetFor(profileLocale) || defaultSiteLocalePreset();
+
+    return normalizeRootLocaleValue((preset && preset.locale) || profileLocale)
+      || normalizeRootLocaleValue((defaultSiteLocalePreset() || {}).locale)
+      || 'en_US';
+  }
+
+  function siteContextPayloadForActiveSite(profile) {
+    const source = profile && typeof profile === 'object' ? profile : (activeSiteProfile() || {});
+    const locale = rootLocaleForSiteProfile(source);
+    const localeParts = medGenLocaleParts(locale);
+    const preset = siteLocalePresetFor(locale) || defaultSiteLocalePreset();
+    const market = presetMarket(preset);
+    const profileMarket = source.market && typeof source.market === 'object' ? source.market : {};
+    const country = String(source.geo_country || profileMarket.country || market.country || localeParts.country || '')
+      .trim()
+      .slice(0, 2)
+      .toUpperCase();
+    const currency = medGenMarketCurrencyForActiveSite(source, locale);
+
+    return {
+      site_id: String(source.site_id || activeSiteKey() || '').trim(),
+      domain: String(source.domain || '').trim(),
+      base_url: String(source.base_url || '').trim(),
+      root_locale: locale,
+      html_locale: locale.replace('_', '-'),
+      language: localeParts.language,
+      country,
+      market_currency: currency,
+      currency,
+      locale_strategy: 'single_root'
+    };
+  }
+
+  function medGenLocaleForActiveSite() {
+    return rootLocaleForSiteProfile(activeSiteProfile());
   }
 
   function medGenLocaleParts(locale) {
-    const normalized = String(locale || 'ru_RU').trim().replace('-', '_');
+    const fallback = normalizeRootLocaleValue((defaultSiteLocalePreset() || {}).locale) || 'en_US';
+    const normalized = normalizeRootLocaleValue(locale) || fallback;
     const match = normalized.match(/^([a-z]{2})_([A-Z]{2})$/);
 
     if (match) {
@@ -9448,23 +9406,22 @@
       };
     }
 
+    const fallbackMatch = fallback.match(/^([a-z]{2})_([A-Z]{2})$/);
+
+    if (fallbackMatch) {
+      return {
+        language: fallbackMatch[1],
+        country: fallbackMatch[2]
+      };
+    }
+
     return {
-      language: 'ru',
-      country: 'RU'
+      language: 'en',
+      country: 'US'
     };
   }
 
   function productRoutePrefixForLocale(locale) {
-    const normalized = String(locale || 'ru_RU').trim().replace('_', '-').toLowerCase();
-
-    if (normalized.startsWith('pl')) {
-      return '/recenzje/';
-    }
-
-    if (normalized.startsWith('ru')) {
-      return '/obzory/';
-    }
-
     return '/reviews/';
   }
 
@@ -9485,8 +9442,15 @@
   }
 
   function marketCurrencyForLocaleCountry(locale, country) {
+    const preset = siteLocalePresetFor(locale);
+    const market = presetMarket(preset);
+    const presetCurrency = String(market.currency || '').trim().toUpperCase();
+    if (/^[A-Z]{3}$/.test(presetCurrency) && !country) {
+      return presetCurrency;
+    }
+
     const localeParts = medGenLocaleParts(locale);
-    const normalizedCountry = String(country || localeParts.country || '').trim().slice(0, 2).toUpperCase();
+    const normalizedCountry = String(country || market.country || localeParts.country || '').trim().slice(0, 2).toUpperCase();
 
     return {
       RU: 'RUB',
@@ -9502,7 +9466,11 @@
       US: 'USD',
       CA: 'CAD',
       AU: 'AUD',
-      NZ: 'NZD'
+      NZ: 'NZD',
+      BR: 'BRL',
+      SE: 'SEK',
+      UA: 'UAH',
+      IN: 'INR'
     }[normalizedCountry] || 'EUR';
   }
 
@@ -9524,7 +9492,7 @@
       return '';
     }
 
-    const codeMatch = text.match(/\b(USD|EUR|GBP|PLN|RUB|KZT|BGN|RON|CZK|HUF|TRY|CAD|AUD|NZD)\b/);
+    const codeMatch = text.match(/\b(USD|EUR|GBP|PLN|RUB|KZT|BGN|RON|CZK|HUF|TRY|CAD|AUD|NZD|BRL|SEK|UAH|INR)\b/);
 
     if (codeMatch) {
       return codeMatch[1];
@@ -9570,11 +9538,26 @@
     };
   }
 
+  const medGenProductBundleRoles = [
+    'product_card',
+    'component_evidence_article',
+    'product_reference_upscale',
+    'product_studio_images',
+    'expert_profile'
+  ];
+  const medGenProductBundlePreviewRoles = [
+    'product_card',
+    'component_evidence_article',
+    'expert_profile'
+  ];
+
   function medGenProductBundleRoleLabel(role) {
     return {
       product_card: 'Товар',
       component_evidence_article: 'Статья по компоненту',
-      expert_profile: 'Эксперт (legacy)',
+      product_reference_upscale: 'Апскейл фото',
+      product_studio_images: 'Фото 3-5 ракурсов',
+      expert_profile: 'Эксперт',
       product_review: 'Обзор (legacy)'
     }[role] || role || 'Задача';
   }
@@ -9606,7 +9589,7 @@
   }
 
   function medGenProductBundleStatus(bundleId) {
-    const expectedRoles = ['product_card', 'component_evidence_article'];
+    const expectedRoles = medGenProductBundleRoles;
     const tasks = medGenProductBundleTasks(bundleId);
     const roleState = {};
 
@@ -9648,15 +9631,19 @@
     const bundle_deployed_count = values.filter((item) => item.deployed).length;
 
     return {
-      ok: values.length === 2,
+      ok: values.length === expectedRoles.length,
       bundle_id: String(bundleId || '').trim(),
       site_id: activeSiteKey(),
-      required_count: 2,
+      required_count: expectedRoles.length,
+      preview_required_count: medGenProductBundlePreviewRoles.length,
       present_count: values.filter((item) => item.present).length,
       bundle_ready_count,
       bundle_preview_ready_count,
       bundle_deployed_count,
       ready_task_ids: values.filter((item) => item.ready && item.task_id).map((item) => item.task_id),
+      preview_ready_task_ids: values
+        .filter((item) => medGenProductBundlePreviewRoles.includes(item.role) && item.ready && item.task_id)
+        .map((item) => item.task_id),
       preview_task_ids: values.filter((item) => item.preview_ready && item.task_id).map((item) => item.task_id),
       roles: roleState
     };
@@ -9694,34 +9681,81 @@
 
     if (status.present_count > 0) {
       setMedGenProductBundleStatus(
-        'Evidence-пакет: задач ' + status.present_count + '/2, ready ' + status.bundle_ready_count + '/2, preview ' + status.bundle_preview_ready_count + '/2.'
+        'Content-linkage пакет: задач ' + status.present_count + '/' + status.required_count + ', ready ' + status.bundle_ready_count + '/' + status.required_count + ', preview ' + status.bundle_preview_ready_count + '/' + status.preview_required_count + '.'
       );
     }
 
     return status;
   }
 
-  function medGenProductBundlePayloads() {
+  async function medGenBundleReferenceImageBase64() {
+    const fileInput = document.querySelector('[data-medgen-bundle-reference-file]');
+    const productCardFileInput = document.querySelector('[data-product-card-media-file]');
+    const sourceInput = fileInput instanceof HTMLInputElement && fileInput.files && fileInput.files.length > 0
+      ? fileInput
+      : productCardFileInput;
+
+    if (!(sourceInput instanceof HTMLInputElement) || !sourceInput.files || sourceInput.files.length === 0) {
+      return '';
+    }
+
+    const file = sourceInput.files[0];
+    const allowed = ['image/webp', 'image/jpeg', 'image/png'];
+
+    if (!allowed.includes(file.type)) {
+      throw new Error('reference_image_mime_must_be_webp_jpeg_or_png');
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      throw new Error('reference_image_must_be_5mb_or_smaller');
+    }
+
+    return fileToBase64(file);
+  }
+
+  async function preparedMedGenProductBundlePayloads() {
+    return medGenProductBundlePayloads({
+      referenceImageBase64: await medGenBundleReferenceImageBase64()
+    });
+  }
+
+  function productCardInputValue(key) {
+    const field = document.querySelector('[data-product-card-input="' + key + '"]');
+
+    return (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement || field instanceof HTMLSelectElement)
+      ? field.value.trim()
+      : '';
+  }
+
+  function medGenProductBundlePayloads(options) {
+    const settings = options && typeof options === 'object' ? options : {};
+    const productSeed = productCardState.lastQueuePayload && typeof productCardState.lastQueuePayload === 'object'
+      ? productCardState.lastQueuePayload
+      : {};
+    const seedFields = productSeed.fields && typeof productSeed.fields === 'object' ? productSeed.fields : {};
+    const seedMedia = productSeed.media && typeof productSeed.media === 'object' ? productSeed.media : {};
+    const seedPrimaryImage = seedMedia.primary_image && typeof seedMedia.primary_image === 'object' ? seedMedia.primary_image : {};
     const profile = activeSiteProfile();
     const siteId = activeSiteKey();
     const site = medGenProductBundleSite();
     const locale = medGenLocaleForActiveSite();
     const localeParts = medGenLocaleParts(locale);
     const marketCurrency = medGenMarketCurrencyForActiveSite(profile, locale);
-    const productName = medGenBundleField('[data-medgen-bundle-product-field="name"]', '#admin-medgen-product-name');
-    const productBrand = medGenBundleField('[data-medgen-bundle-product-field="brand"]', '#admin-medgen-product-brand');
-    const keyComponent = medGenBundleField('[data-medgen-bundle-product-field="component"]', '');
-    const rawProductPrice = medGenBundleField('[data-medgen-bundle-product-field="price"]', '');
+    const productName = medGenBundleField('[data-medgen-bundle-product-field="name"]', '#admin-medgen-product-name') || String(seedFields.title || '').trim() || medGenBundleField('#admin-product-card-title', '');
+    const productBrand = medGenBundleField('[data-medgen-bundle-product-field="brand"]', '#admin-medgen-product-brand') || String(seedFields.brand || '').trim() || productCardInputValue('brand');
+    const keyComponent = medGenBundleField('[data-medgen-bundle-product-field="component"]', '') || String(seedFields.key_component || '').trim() || productCardInputValue('key_component');
+    const rawProductPrice = medGenBundleField('[data-medgen-bundle-product-field="price"]', '') || String(seedFields.price_range || seedFields.price || '').trim() || productCardInputValue('price_range') || productCardInputValue('price');
     const productPriceCurrency = medGenPriceCurrencyCode(rawProductPrice);
     const productPrice = medGenProductPriceForMarket(rawProductPrice, marketCurrency);
-    const sellerUrl = medGenBundleField('[data-medgen-bundle-product-field="seller_url"]', '');
-    const productImage = medGenBundleField('[data-medgen-bundle-product-field="image"]', '');
-    const productSlug = normalizeSlug(medGenBundleField('[data-medgen-bundle-product-field="slug"]', '') || productName);
-    const productComposition = medGenBundleField('[data-medgen-bundle-product-field="composition"]', '');
-    const componentSlug = normalizeSlug(keyComponent || (productName ? productName + ' key ingredient' : 'component-evidence'));
+    const sellerUrl = medGenBundleField('[data-medgen-bundle-product-field="seller_url"]', '') || String(seedFields.buy_url || seedFields.seller_url || '').trim() || productCardInputValue('buy_url');
+    const productImage = medGenBundleField('[data-medgen-bundle-product-field="image"]', '') || String(seedPrimaryImage.path || seedFields.primary_image || '').trim() || medGenBundleField('#admin-product-card-media-path', '');
+    const productSlug = normalizeSlug(medGenBundleField('[data-medgen-bundle-product-field="slug"]', '') || productSeed.slug || medGenBundleField('#admin-product-card-slug', '') || productName);
+    const productDescription = medGenBundleField('[data-medgen-bundle-product-field="description"]', '') || String(seedFields.description || seedFields.verdict || '').trim() || productCardInputValue('description') || productCardInputValue('verdict');
+    const productComposition = medGenBundleField('[data-medgen-bundle-product-field="composition"]', '') || String(seedFields.composition || seedFields.ingredients || '').trim() || productCardInputValue('composition') || productCardInputValue('ingredients');
     const evidenceTitle = keyComponent
       ? keyComponent + ' evidence review'
       : (productName ? productName + ' key component evidence' : '');
+    const referenceImageBase64 = String(settings.referenceImageBase64 || '').trim();
     const notes = medGenBundleField('[data-medgen-bundle-field="notes"]', '#admin-medgen-notes');
     const productRoute = productRouteForSlug(productSlug, locale);
     const evidenceRoute = productEvidenceAnchorRoute(productRoute);
@@ -9740,8 +9774,20 @@
     if (!productSlug) {
       issues.push('product_slug_required');
     }
-    if (!keyComponent) {
-      issues.push('key_component_required');
+    if (!productDescription && !productComposition) {
+      issues.push('product_description_or_composition_required');
+    }
+    if (!rawProductPrice) {
+      issues.push('product_price_required');
+    }
+    if (!sellerUrl) {
+      issues.push('seller_url_required');
+    }
+    if (!productImage && !referenceImageBase64) {
+      issues.push('product_reference_image_required');
+    }
+    if (!referenceImageBase64) {
+      issues.push('reference_image_base64_required_for_medgen_image_tasks');
     }
     if (productPriceCurrency && productPriceCurrency !== marketCurrency) {
       issues.push('product_price_currency_mismatch: expected ' + marketCurrency + ', got ' + productPriceCurrency);
@@ -9757,18 +9803,20 @@
       market_currency: marketCurrency,
       seller_url: sellerUrl,
       image: productImage,
-      key_component: keyComponent,
+      key_component_override: keyComponent,
+      description: productDescription,
       composition: productComposition
     };
     const sharedExtra = {
       cmx_bundle_type: 'cmx_ingredient_evidence_bundle',
       bundle_id: bundleId,
-      completion_rule: 'complete_after_product_card_and_component_evidence_preview_approval',
-      required_pages: ['product_card', 'component_evidence_section'],
+      completion_rule: 'complete_after_content_media_author_tasks_and_pages_preview_approval',
+      required_tasks: medGenProductBundleRoles.slice(),
+      required_pages: medGenProductBundlePreviewRoles.slice(),
       product_route: productRoute,
       component_article_route: evidenceRoute,
       component_article_anchor_id: 'component-evidence',
-      key_component: keyComponent,
+      key_component_override: keyComponent,
       research_protocol: [
         'identify_key_component_from_product_or_composition',
         'find_scientific_articles_for_component',
@@ -9786,8 +9834,9 @@
     };
     const baseNotes = [
       notes,
-      'CMX ingredient evidence bundle: generate only the requested page skeleton part. The product page contains the component evidence article as a same-page section with anchor #component-evidence; the CTA scrolls to this section and does not open a separate guide page.',
-      'MedGen protocol: use the required key active component supplied by CMX, find scientific articles about that component, rewrite the evidence for the requested locale, and return sources with article authors, titles, URLs and publication details when available.',
+      'CMX content-linkage scenario: this offer seed must be filled as one package. Generate product copy, select the key active component from product description/composition unless extra.key_component_override is provided, generate same-page component evidence article, return sources, SEO fields, image results, and one expert profile.',
+      'The product page contains the component evidence article as a same-page section with anchor #component-evidence; the CTA scrolls to this section and does not open a separate guide page.',
+      'MedGen protocol: select or confirm the key active component, find scientific articles about that component, rewrite the evidence for the requested locale, and return sources with article authors, titles, URLs and publication details when available.',
       sellerUrl ? 'The seller_url is a CTA target for the product button, not a research or bibliography source.' : ''
     ].filter(Boolean).join('\n\n');
 
@@ -9814,7 +9863,15 @@
           extra: Object.assign({}, sharedExtra, {
             cmx_content_type: 'product_card',
             bundle_role: 'product_card',
-            cmx_product_input: productInput
+            cmx_product_input: productInput,
+            expected_output: [
+              'rewritten_product_description',
+              'selected_key_component',
+              'product_card_copy',
+              'seo_title',
+              'seo_description',
+              'media_gallery_references'
+            ]
           })
         },
         publish: true
@@ -9843,19 +9900,139 @@
             bundle_role: 'component_evidence_article',
             component_name: keyComponent,
             product_composition: productComposition,
+            product_description: productDescription,
             source_requirements: {
-              primary_topic: keyComponent || 'key component identified by MedGen from product composition',
+              primary_topic: keyComponent || 'key component identified by MedGen from product description and composition',
               source_kind: 'scientific_article',
               include_authors: true,
               include_publication_title: true,
               include_url: true,
               include_year_or_date: true
-            }
+            },
+            expected_output: [
+              'selected_key_component',
+              'article.title',
+              'article.body',
+              'sources',
+              'seo_title',
+              'seo_description'
+            ]
+          })
+        },
+        publish: true
+      },
+      {
+        role: 'product_reference_upscale',
+        label: 'Reference image upscale',
+        payload: {
+          type: 'image_upscale',
+          page_title: productName ? productName + ' reference image upscale' : 'Product reference image upscale',
+          locale,
+          language: localeParts.language,
+          country: localeParts.country,
+          site: Object.assign({}, site, { market: { currency: marketCurrency } }),
+          product,
+          notes: baseNotes,
+          extra: Object.assign({}, sharedExtra, {
+            cmx_content_type: 'image_upscale',
+            bundle_role: 'product_reference_upscale',
+            input_image_base64: referenceImageBase64,
+            prompt: 'Upscale and clean the submitted product reference image. Preserve the exact product identity, package shape, label colors, logo/text placement and visible product proportions. Return one raster-friendly product image with localized alt text.',
+            output: {
+              format: 'webp',
+              width: 1200,
+              height: 1200,
+              count: 1,
+              max_bytes: 1500000
+            },
+            expected_output: [
+              'image_result.images'
+            ]
+          })
+        },
+        publish: false
+      },
+      {
+        role: 'product_studio_images',
+        label: 'Studio product images',
+        payload: {
+          type: 'product_studio_images',
+          page_title: productName ? productName + ' studio product images' : 'Product studio images',
+          locale,
+          language: localeParts.language,
+          country: localeParts.country,
+          site: Object.assign({}, site, { market: { currency: marketCurrency } }),
+          product,
+          notes: baseNotes,
+          extra: Object.assign({}, sharedExtra, {
+            cmx_content_type: 'product_studio_images',
+            bundle_role: 'product_studio_images',
+            input_image_base64: referenceImageBase64,
+            prompt: 'Generate 3-5 original studio product images from the submitted reference. Use different realistic angles while preserving the same packaging, label identity, color palette, product shape and brand. Do not substitute another product.',
+            output: {
+              format: 'webp',
+              width: 1200,
+              height: 1200,
+              count: 5,
+              max_bytes: 1500000
+            },
+            expected_output: [
+              'image_result.images'
+            ]
+          })
+        },
+        publish: false
+      },
+      {
+        role: 'expert_profile',
+        label: 'Expert profile',
+        payload: {
+          type: 'author',
+          page_title: productName ? productName + ' component expert' : 'Component evidence expert',
+          locale,
+          language: localeParts.language,
+          country: localeParts.country,
+          site: Object.assign({}, site, { market: { currency: marketCurrency } }),
+          product,
+          author: {
+            name: 'MedGen-selected expert',
+            role: 'component evidence author',
+            background: 'Generate one fictional but plausible expert profile connected to the selected key component and evidence topic. Return the final public expert name, profile article, portrait direction/image if available, and exactly one external official_url/social profile URL for the public Author page button.'
+          },
+          target: {
+            slug: productSlug ? productSlug + '-expert' : 'component-expert',
+            route: productSlug ? '/experts/' + productSlug + '-expert/' : '/experts/component-expert/',
+            content_path: productSlug ? 'content/pages/authors/' + productSlug + '-expert.json' : 'content/pages/authors/component-expert.json'
+          },
+          notes: [
+            baseNotes,
+            'Generate one expert/author for the Experts section. The public expert listing card must include portrait, name, short role, three-line preview and one localized theme button to the author page. The author profile page must expose exactly one external official_url button; do not create a dedicated LinkedIn button or multiple social buttons.'
+          ].filter(Boolean).join('\n\n'),
+          extra: Object.assign({}, sharedExtra, {
+            cmx_content_type: 'expert_profile',
+            bundle_role: 'expert_profile',
+            author_generation_policy: 'generate_one_expert_related_to_selected_key_component',
+            official_url_required: true,
+            expected_output: [
+              'expert_name',
+              'profile_bio',
+              'article.body',
+              'portrait_image',
+              'official_url',
+              'seo_title',
+              'seo_description'
+            ]
           })
         },
         publish: true
       }
     ];
+
+    if (keyComponent) {
+      wrappers.forEach((wrapper) => {
+        wrapper.payload.extra.key_component = keyComponent;
+      });
+    }
 
     return {
       ok: issues.length === 0,
@@ -9870,7 +10047,7 @@
         product: productRoute,
         component_evidence: evidenceRoute
       },
-      completion_rule: 'complete_after_product_card_and_component_evidence_preview_approval',
+      completion_rule: 'complete_after_content_media_author_tasks_and_pages_preview_approval',
       issues,
       tasks: wrappers
     };
@@ -9892,36 +10069,37 @@
     const bundle = medGenProductBundlePayloads();
     const status = syncMedGenProductBundleStatus();
 
-    if (status.bundle_ready_count !== 2) {
+    if (status.bundle_ready_count !== status.required_count || status.preview_ready_task_ids.length !== status.preview_required_count) {
       const result = Object.assign({}, status, {
         ok: false,
         action: 'medgen_product_bundle_preview',
-        issues: ['bundle_requires_2_succeeded_tasks_before_preview']
+        issues: ['bundle_requires_all_tasks_succeeded_and_previewable_pages_ready_before_preview']
       });
 
       setMedGenProductBundleOutput(result);
-      setMedGenProductBundleStatus('Preview пакета остановлен: нужно 2/2 succeeded задач.');
+      setMedGenProductBundleStatus('Preview пакета остановлен: нужно ' + status.required_count + '/' + status.required_count + ' succeeded задач, preview собирается для ' + status.preview_required_count + ' page-задач.');
       return result;
     }
 
     const siteId = activeSiteKey();
     const previewResults = [];
     setStatusBusy('admin-medgen-product-bundle-status', true);
-    setMedGenProductBundleStatus('Собираю preview для 2 страниц evidence-пакета...');
+    setMedGenProductBundleStatus('Собираю preview для page-задач контент-связки...');
 
     try {
-      for (const taskId of status.ready_task_ids) {
+      for (const taskId of status.preview_ready_task_ids) {
         previewResults.push(Object.assign({ task_id: taskId }, await cloudflareCreateMedGenPreview(siteId, taskId)));
       }
 
-      const ok = previewResults.length === 2 && previewResults.every((result) => result && result.ok);
+      const ok = previewResults.length === status.preview_required_count && previewResults.every((result) => result && result.ok);
       const firstPreviewUrl = previewResults.map(medgenPreviewResultUrl).find(Boolean) || '';
       const result = {
         ok,
         action: 'medgen_product_bundle_preview',
         site_id: siteId,
         bundle_id: bundle.bundle_id,
-        task_ids: status.ready_task_ids,
+        task_ids: status.preview_ready_task_ids,
+        media_task_ids: status.ready_task_ids.filter((taskId) => !status.preview_ready_task_ids.includes(taskId)),
         preview_results: previewResults,
         first_preview_url: firstPreviewUrl
       };
@@ -9929,8 +10107,8 @@
       setMedGenProductBundleOutput(result);
       setMedGenOutput(result);
       setMedGenProductBundleStatus(ok
-        ? 'Preview evidence-пакета собран: 2/2 страницы готовы к approval.'
-        : 'Preview evidence-пакета собран не полностью. Проверьте JSON ответа.');
+        ? 'Preview content-linkage пакета собран: page-задачи готовы к approval, media-задачи сохранены в пакете.'
+        : 'Preview content-linkage пакета собран не полностью. Проверьте JSON ответа.');
       await refreshRuntimeContentIndexForActiveSite({ silent: true, force: true });
       await refreshReleaseStatusForActiveSite({ silent: true });
       await refreshMedGenTaskIndexForActiveSite({ force: true });
@@ -9961,28 +10139,28 @@
     const bundle = medGenProductBundlePayloads();
     const status = syncMedGenProductBundleStatus();
 
-    if (status.bundle_ready_count !== 2) {
+    if (status.bundle_ready_count !== status.required_count || status.preview_ready_task_ids.length !== status.preview_required_count) {
       const result = Object.assign({}, status, {
         ok: false,
         action: 'medgen_product_bundle_deploy',
-        issues: ['bundle_requires_2_succeeded_tasks_before_deploy']
+        issues: ['bundle_requires_all_tasks_succeeded_and_previewable_pages_ready_before_deploy']
       });
 
       setMedGenProductBundleOutput(result);
-      setMedGenProductBundleStatus('Deploy пакета остановлен: нужно 2/2 succeeded задач.');
+      setMedGenProductBundleStatus('Deploy пакета остановлен: нужно ' + status.required_count + '/' + status.required_count + ' succeeded задач и preview page-задач.');
       return result;
     }
 
-    if (!window.confirm('Подтвердить approval и отправить deploy evidence-пакета: товар и статья по компоненту?')) {
-      setMedGenProductBundleStatus('Deploy evidence-пакета отменен.');
+    if (!window.confirm('Подтвердить approval и отправить deploy content-linkage пакета: товар, evidence-статья, фото и эксперт?')) {
+      setMedGenProductBundleStatus('Deploy content-linkage пакета отменен.');
       return Object.assign({}, status, { ok: false, cancelled: true });
     }
 
     setStatusBusy('admin-medgen-product-bundle-status', true);
-    setMedGenProductBundleStatus('Подтверждаю preview и деплою evidence-пакет...');
+    setMedGenProductBundleStatus('Подтверждаю preview и деплою content-linkage пакет...');
 
     try {
-      const result = await deployMedGenPreviewTasks(activeSiteKey(), status.ready_task_ids, 'medgen_product_bundle_deploy', {
+      const result = await deployMedGenPreviewTasks(activeSiteKey(), status.preview_ready_task_ids, 'medgen_product_bundle_deploy', {
         ssh_mirror_requested: false
       });
       const combined = Object.assign({}, result || {}, {
@@ -9990,11 +10168,11 @@
         bundle_status_before_deploy: status
       });
 
-      setMedGenProductBundleOutput(combined);
-      setMedGenOutput(combined);
+      setMedGenProductBundleOutput(medGenPublicPayload(combined));
+      setMedGenOutput(medGenPublicPayload(combined));
       setMedGenProductBundleStatus(combined && combined.ok
-        ? 'Evidence-пакет прошел approval и отправлен в Cloudflare Pages deploy.'
-        : 'Deploy evidence-пакета не завершен. Проверьте JSON и release status.');
+        ? 'Content-linkage пакет прошел approval и отправлен в Cloudflare Pages deploy.'
+        : 'Deploy content-linkage пакета не завершен. Проверьте JSON и release status.');
       await refreshRuntimeContentIndexForActiveSite({ silent: true, force: true });
       await refreshReleaseStatusForActiveSite({ silent: true });
       await refreshMedGenTaskIndexForActiveSite({ force: true });
@@ -10009,7 +10187,7 @@
     if (!isGithubMode()) {
       const result = { ok: false, issues: ['github_pages_admin_required'] };
 
-      setMedGenProductBundleStatus('Evidence-пакет товара доступен только в CMS-admin_v2 на GitHub Pages.');
+      setMedGenProductBundleStatus('Content-linkage пакет товара доступен только в CMS-admin_v2 на GitHub Pages.');
       setMedGenProductBundleOutput(result);
       return result;
     }
@@ -10018,12 +10196,25 @@
       return siteContextError();
     }
 
-    const bundle = medGenProductBundlePayloads();
+    let bundle;
+    try {
+      bundle = await preparedMedGenProductBundlePayloads();
+    } catch (error) {
+      const result = {
+        ok: false,
+        action: 'medgen_product_bundle_prepare',
+        issues: [error && error.message ? error.message : 'reference_image_read_failed']
+      };
+
+      setMedGenProductBundleOutput(result);
+      setMedGenProductBundleStatus('Пакет требует правки: не удалось прочитать reference image.');
+      return result;
+    }
 
     if (dryRun || !bundle.ok) {
-      setMedGenProductBundleOutput(bundle);
+      setMedGenProductBundleOutput(medGenPublicPayload(bundle));
       setMedGenProductBundleStatus(bundle.ok
-        ? 'Пакет валиден: будут созданы 2 MedGen задачи без GitHub Actions.'
+        ? 'Пакет валиден: будут созданы ' + bundle.tasks.length + ' MedGen задач без GitHub Actions.'
         : 'Пакет требует правки: ' + bundle.issues.join('; '));
       return bundle;
     }
@@ -10035,23 +10226,23 @@
       });
 
       setMedGenProductBundleOutput(result);
-      setMedGenProductBundleStatus('Evidence-пакет остановлен: нужен Cloudflare runtime, чтобы не тратить GitHub Actions.');
+      setMedGenProductBundleStatus('Content-linkage пакет остановлен: нужен Cloudflare runtime, чтобы не тратить GitHub Actions.');
       return result;
     }
 
-    if (!window.confirm('Создать 2 MedGen задачи для evidence-пакета: товар и научная статья по компоненту? GitHub Actions не будут запускаться.')) {
-      setMedGenProductBundleStatus('Создание evidence-пакета отменено.');
+    if (!window.confirm('Создать ' + bundle.tasks.length + ' MedGen задач для полной контент-связки: товар, статья, фото и эксперт? GitHub Actions не будут запускаться.')) {
+      setMedGenProductBundleStatus('Создание content-linkage пакета отменено.');
       return Object.assign({}, bundle, { ok: false, cancelled: true });
     }
 
-    setMedGenProductBundleStatus('Создаю MedGen задачи evidence-пакета...');
-    setMedGenStatus('Создаю MedGen ingredient evidence package через Worker...');
+    setMedGenProductBundleStatus('Создаю MedGen задачи полной контент-связки...');
+    setMedGenStatus('Создаю MedGen content-linkage package через Worker...');
     setStatusBusy('admin-medgen-product-bundle-status', true);
     setStatusBusy('admin-medgen-status', true);
     updateMedGenStageWidget({
       state: 'running',
-      summary: 'Evidence package',
-      detail: 'Создаются 2 связанные задачи: product card и component evidence article.'
+      summary: 'Content-linkage package',
+      detail: 'Создаются связанные задачи: product card, component evidence article, image upscale, studio images и expert profile.'
     });
 
     const results = [];
@@ -10080,7 +10271,7 @@
         });
       }
 
-      const ok = results.length === 2 && results.every((item) => item.ok);
+      const ok = results.length === bundle.tasks.length && results.every((item) => item.ok);
       const createdTasks = results
         .map((item) => item.runtime && item.runtime.task ? medgenTaskRecordFromRuntime(item.runtime.task) : null)
         .filter(Boolean);
@@ -10100,16 +10291,16 @@
         warnings: ['Товарный пакет не считается complete до succeeded + preview + approval карточки товара и статьи по компоненту.']
       });
 
-      setMedGenProductBundleOutput(combined);
-      setMedGenOutput(combined);
+      setMedGenProductBundleOutput(medGenPublicPayload(combined));
+      setMedGenOutput(medGenPublicPayload(combined));
       setMedGenProductBundleStatus(ok
-        ? 'Созданы 2 MedGen задачи. Дождитесь succeeded, затем соберите preview и approval.'
-        : 'Создание evidence-пакета остановлено: часть задач не создана.');
-      setMedGenStatus(ok ? 'MedGen evidence package создан через Worker.' : 'MedGen evidence package создан частично или с ошибкой.');
+        ? 'Созданы ' + createdTasks.length + ' MedGen задач. Дождитесь succeeded, затем соберите preview и approval.'
+        : 'Создание content-linkage пакета остановлено: часть задач не создана.');
+      setMedGenStatus(ok ? 'MedGen content-linkage package создан через Worker.' : 'MedGen content-linkage package создан частично или с ошибкой.');
       syncMedGenProductBundleStatus();
       updateMedGenStageWidget({
         state: ok ? 'running' : 'error',
-        summary: ok ? '2 задачи созданы' : 'Evidence ошибка',
+        summary: ok ? createdTasks.length + ' задач созданы' : 'Content-linkage ошибка',
         detail: ok ? 'Следующий шаг: poll task_id, preview, approval.' : 'Проверьте Product bundle JSON.'
       });
       window.setTimeout(() => refreshMedGenTaskIndexForActiveSite({ force: true }), 8000);
@@ -10268,11 +10459,11 @@
       const result = {
         ok: false,
         issues: ['cloudflare_runtime_required_for_medgen'],
-        human: 'Для Cloudflare Pages сайтов MedGen create/poll работает только через Worker/D1/R2. Архивный medgen-content.yml не является fallback, чтобы не расходовать GitHub Actions.'
+        human: 'Для Cloudflare Pages сайтов MedGen create/poll работает только через Worker/D1/R2. GitHub Actions не являются fallback, чтобы не расходовать Actions и не обходить runtime gates.'
       };
 
       setMedGenOutput(result);
-      setMedGenStatus('MedGen archived restore kit отключен для Cloudflare Pages. Проверьте Worker/runtime подключение.');
+      setMedGenStatus('MedGen через GitHub Actions отключен для Cloudflare Pages. Проверьте Worker/runtime подключение.');
       updateMedGenStageWidget({
         state: 'error',
         summary: 'Worker runtime недоступен',
@@ -10284,8 +10475,8 @@
     const result = {
       ok: false,
       issues: ['worker_runtime_required_for_medgen'],
-      archived_restore_kit: workflow,
-      human: 'MedGen create/poll не запускается через GitHub Actions. Подключите Worker runtime для выбранного сайта или вручную восстановите archived restore kit вне обычного production path.'
+      disabled_workflow: workflow,
+      human: 'MedGen create/poll не запускается через GitHub Actions. Подключите Worker runtime для выбранного сайта.'
     };
 
     setMedGenOutput(result);
@@ -10321,7 +10512,12 @@
     return domain && domain.includes('.') ? 'support@' + domain : '';
   }
 
-  function fillDomainDefaults() {
+  function knownProductRoutePrefix(value) {
+    return ['/obzory/', '/recenzje/', '/reviews/', '/bady/'].includes(String(value || '').trim());
+  }
+
+  function fillDomainDefaults(forceLocaleRoutes) {
+    const forceRoutes = forceLocaleRoutes === true;
     const domainField = byId('admin-domain-name');
     const baseUrlField = byId('admin-domain-base-url');
     const emailField = byId('admin-domain-email');
@@ -10373,17 +10569,36 @@
     const selectedLocale = defaultLocaleField && defaultLocaleField.value.trim() ? defaultLocaleField.value.trim() : 'en_US';
     const routeDefaults = {
       supplement: productRoutePrefixForLocale(selectedLocale),
-      author: '/' + seed + '-experts/',
-      article: '/' + seed + '-guides/'
+      author: '/experts/',
+      article: '/guides/'
     };
 
     document.querySelectorAll('[data-domain-route-prefix]').forEach((field) => {
       const kind = field.getAttribute('data-domain-route-prefix') || '';
 
-      if (field instanceof HTMLInputElement && !field.value.trim() && routeDefaults[kind]) {
+      const currentValue = field instanceof HTMLInputElement ? field.value.trim() : '';
+      const shouldReplace = forceRoutes && kind === 'supplement' && knownProductRoutePrefix(currentValue);
+
+      if (field instanceof HTMLInputElement && routeDefaults[kind] && (!currentValue || shouldReplace)) {
         field.value = routeDefaults[kind];
       }
     });
+  }
+
+  function collectLocalBusinessPayload(selector, attribute) {
+    const localBusiness = {};
+
+    document.querySelectorAll(selector).forEach((field) => {
+      const key = field.getAttribute(attribute) || '';
+
+      if (!key || !(field instanceof HTMLInputElement || field instanceof HTMLSelectElement || field instanceof HTMLTextAreaElement)) {
+        return;
+      }
+
+      localBusiness[key] = field.value.trim();
+    });
+
+    return localBusiness;
   }
 
   function collectDomainProfilePayload() {
@@ -10394,10 +10609,30 @@
     document.querySelectorAll('[data-domain-field]').forEach((field) => {
       const key = field.getAttribute('data-domain-field') || '';
 
-      if (key && field instanceof HTMLInputElement) {
+      if (key && (field instanceof HTMLInputElement || field instanceof HTMLSelectElement)) {
         payload[key] = field.value.trim();
       }
     });
+
+    payload.local_business = collectLocalBusinessPayload('[data-domain-local-business-field]', 'data-domain-local-business-field');
+
+    const localeField = byId('admin-domain-default-locale');
+    const preset = selectedLocalePreset(localeField) || siteLocalePresetFor(payload.default_locale || '') || defaultSiteLocalePreset();
+    const market = presetMarket(preset);
+    const rootLocale = normalizeRootLocaleValue(preset.locale || payload.default_locale || '');
+    if (rootLocale) {
+      payload.default_locale = rootLocale;
+      payload.root_locale = rootLocale;
+    }
+    if (market.country) {
+      payload.geo_country = String(market.country).trim().toUpperCase();
+    }
+    if (market.currency) {
+      payload.market = {
+        country: String(market.country || '').trim().toUpperCase(),
+        currency: String(market.currency || '').trim().toUpperCase()
+      };
+    }
 
     const routeNamespaces = {};
 
@@ -10545,6 +10780,10 @@
         if (!payload.deploy_profile.cloudflare || !payload.deploy_profile.cloudflare.pages_project) {
           validation.issues.push('cloudflare_pages_project_required');
         }
+        if (!payload.local_business || !String(payload.local_business.address || '').trim()) {
+          validation.issues.push('local_business.address_required');
+        }
+        validation.ok = validation.issues.length === 0;
 
         if (dryRun || !validation.ok) {
           setDomainOutput(validation);
@@ -10620,45 +10859,6 @@
     } finally {
       setStatusBusy('admin-domain-status', false);
     }
-  }
-
-  async function runServerMaintenanceAction(action) {
-    if (!isGithubMode()) {
-      setServerMaintenanceStatus('Server maintenance доступен только в GitHub Pages-админке.');
-      setServerMaintenanceOutput({ ok: false, issues: ['github_pages_admin_required'] });
-      return;
-    }
-
-    const providerField = document.querySelector('[data-domain-hosting-provider-select]');
-    if (providerField && providerField.value === 'cloudflare_pages') {
-      setServerMaintenanceStatus('VPS обслуживание скрыто для Cloudflare Pages профиля.');
-      setServerMaintenanceOutput({ ok: false, issues: ['static_vps_required'] });
-      return;
-    }
-
-    const targetField = byId('admin-server-maintenance-target');
-    const purgeField = byId('admin-server-maintenance-purge');
-    const target = targetField && targetField.value.trim() ? targetField.value.trim() : 'production';
-    const purgeRuntimePackages = purgeField ? purgeField.checked : true;
-    const actionLabels = {
-      backup: 'создать backup VPS',
-      reset_static_host: 'очистить static host',
-      backup_and_reset_static_host: 'создать backup и очистить static host'
-    };
-
-    if (action !== 'backup' && !window.confirm('Запустить обслуживание VPS: ' + (actionLabels[action] || action) + '? Это изменит состояние сервера.')) {
-      setServerMaintenanceStatus('Операция обслуживания отменена');
-      return;
-    }
-
-    const result = {
-      ok: false,
-      action: 'archived_restore_kit_disabled',
-      issues: ['server-maintenance.yml находится только в docs/github-actions-backup/ и не запускается из production UI. Используйте approved builder/SSH runtime.'],
-      data: { target, purge_runtime_packages: purgeRuntimePackages }
-    };
-    setServerMaintenanceOutput(result);
-    setServerMaintenanceStatus('Server maintenance через GitHub Actions отключен; нужен approved SSH/builder runtime.');
   }
 
   function requestId(prefix) {
@@ -11099,20 +11299,10 @@
       composition: 'При редактировании этой строки меняется состав товара. Если ключевой компонент не указан, MedGen использует состав, чтобы выбрать главный компонент.',
       component_article_route: 'При редактировании этой строки меняется путь к evidence-статье о ключевом компоненте товара.',
       evidence_cta_label: 'При редактировании этой строки меняется текст кнопки, ведущей на evidence-статью по компоненту.',
-      review_cta_label: 'Legacy: при редактировании этой строки меняется текст кнопки или ссылки, ведущей на старый обзор товара.',
-      review_route: 'Legacy: при редактировании этой строки меняется путь к старой странице обзора.',
-      review_title: 'При редактировании этой строки меняется заголовок связанного обзора товара.',
-      review_preview: 'При редактировании этой строки меняется короткое превью обзора, которое видно в карточке или блоке Medical Review.',
-      review_link_label: 'При редактировании этой строки меняется подпись ссылки на обзор.',
       compare_label: 'При редактировании этой строки меняется текст ссылки или кнопки сравнения.',
       compare_route: 'При редактировании этой строки меняется URL страницы сравнения.',
       author_name: 'При редактировании этой строки меняется имя автора, которое выводится на странице, в карточке автора и в микроразметке.',
       author_route: 'При редактировании этой строки меняется ссылка на страницу автора.',
-      reviewer: 'При редактировании этой строки меняется имя медицинского рецензента или эксперта в блоке проверки.',
-      reviewer_role: 'При редактировании этой строки меняется должность или специализация рецензента.',
-      reviewer_route: 'При редактировании этой строки меняется ссылка на страницу рецензента.',
-      reviewer_image: 'При редактировании этой строки меняется фотография рецензента в блоке Medical Review.',
-      reviewer_social_links: 'При редактировании этой строки меняются ссылки на профили рецензента, которые видны в его блоке.',
       updated: 'При редактировании этой строки меняется дата обновления, которую пользователь видит на странице.',
       primary_image: 'При редактировании этой строки меняется основная фотография страницы или товара.',
       verdict: 'При редактировании этой строки меняется короткий редакционный вывод о товаре.',
@@ -11127,6 +11317,7 @@
       role: 'При редактировании этой строки меняется роль автора или эксперта.',
       credentials: 'При редактировании этой строки меняется список квалификаций автора.',
       bio: 'При редактировании этой строки меняется описание автора или эксперта.',
+      official_url: 'При редактировании этой строки меняется внешняя официальная страница автора. В публичном шаблоне выводится одна кнопка.',
       reviews_route: 'При редактировании этой строки меняется ссылка на список обзоров автора.',
       social_links: 'При редактировании этой строки меняются социальные ссылки автора.',
       policy_sections: 'При редактировании этой строки меняется основной текст технической страницы.',
@@ -11460,8 +11651,7 @@
       'Статус': 'Показывает короткое состояние панели. Если текст длинный, он прокручивается внутри карточки.',
       'Сайты': 'Без выбранного домена показывает общую статистику: сколько live-страниц есть в панели и сколько сайтов зарегистрировано.',
       'Сайт': 'После выбора домена показывает статистику конкретного сайта: технические страницы, карточки товаров и общее число live-страниц.',
-      'Версия': 'Версия сборщика админки и схемы панели.',
-      'Лимиты': 'Показывает главный контролируемый лимит Cloudflare runtime и, если доступно, архивную статистику Actions без использования Actions как рабочего пути.'
+      'Версия': 'Версия сборщика админки и схемы панели.'
     };
 
     document.querySelectorAll('.metric').forEach((metric) => {
@@ -11500,7 +11690,7 @@
       'admin-editorial-existing-page': 'Выбирает готовую страницу сайта. После выбора матрица показывает поля именно этой страницы.',
       'admin-editorial-content-type': 'Выбирает тип шаблона: товар, статья, обзор, автор, категория или техническая страница.',
       'admin-editorial-title': 'Меняет главный заголовок страницы и название, которое будет видно в списках и ссылках.',
-      'admin-editorial-slug': 'Меняет URL-часть страницы после домена. Например, значение omega даст путь вида /bady/omega/.',
+      'admin-editorial-slug': 'Меняет URL-часть страницы после домена. Например, значение omega даст путь вида /reviews/omega/; подписи ссылок остаются на языке сайта.',
       'admin-editorial-media-file': 'Загружает новую картинку для выбранной страницы или карточки.',
       'admin-editorial-media-path': 'Указывает путь к картинке, которая будет показана на сайте.',
       'admin-editorial-media-alt': 'Меняет alt-текст картинки для SEO и доступности.',
@@ -11865,6 +12055,7 @@
     const route = mode === 'edit' && selectedPage && selectedPage.route
       ? selectedPage.route
       : replacePlaceholders(preset.route_template || '/{{slug}}/', { '{{slug}}': slug });
+    const siteContext = siteContextPayloadForActiveSite();
     const fields = {};
     const mediaPath = byId('admin-editorial-media-path') ? byId('admin-editorial-media-path').value.trim() : '';
     const mediaAlt = byId('admin-editorial-media-alt') ? byId('admin-editorial-media-alt').value.trim() : '';
@@ -11885,6 +12076,13 @@
     return {
       request_id: requestId('req-editorial-queue'),
       actor: editorialActorPayload(),
+      site_id: siteContext.site_id,
+      site_context: siteContext,
+      root_locale: siteContext.root_locale,
+      locale: siteContext.root_locale,
+      language: siteContext.language,
+      country: siteContext.country,
+      market_currency: siteContext.market_currency,
       content_type: contentType,
       mode,
       language_folder: '',
@@ -12477,19 +12675,23 @@
   }
 
   function breadcrumbsForRoute(route, title, contentType) {
-    const crumbs = [{ title: 'Home', route: '/' }];
+    const locale = medGenLocaleForActiveSite();
+    const normalizedLocale = String(locale || '').replace('_', '-').toLowerCase();
+    const isRu = normalizedLocale.startsWith('ru');
+    const isPl = normalizedLocale.startsWith('pl');
+    const crumbs = [{ title: isRu ? 'Главная' : (isPl ? 'Strona główna' : 'Home'), route: '/' }];
 
     if (contentType === 'product') {
-      crumbs.push({ title: 'Popular products', route: '/bady/' });
+      crumbs.push({ title: isRu ? 'Обзор' : (isPl ? 'Recenzje' : 'Reviews'), route: productRoutePrefixForLocale(locale) });
     } else if (contentType === 'author') {
-      crumbs.push({ title: 'Experts', route: '/experts/' });
+      crumbs.push({ title: isRu ? 'Эксперты' : (isPl ? 'Eksperci' : 'Experts'), route: '/experts/' });
     } else if (contentType === 'article') {
-      crumbs.push({ title: 'Guides', route: '/guides/' });
+      crumbs.push({ title: isRu ? 'Гайды и статьи' : (isPl ? 'Przewodniki i artykuły' : 'Guides'), route: '/guides/' });
     } else if (contentType === 'review') {
-      crumbs.push({ title: 'Гайды и статьи', route: '/guides/' });
+      crumbs.push({ title: isRu ? 'Гайды и статьи' : (isPl ? 'Przewodniki i artykuły' : 'Guides'), route: '/guides/' });
     }
 
-    crumbs.push({ title: title || 'Untitled page', route });
+    crumbs.push({ title: title || (isRu ? 'Страница' : (isPl ? 'Strona' : 'Untitled page')), route });
 
     return crumbs;
   }
@@ -12604,19 +12806,9 @@
     props.key_component = fields.key_component || props.key_component || '';
     props.component_article_route = fields.component_article_route || props.component_article_route || '';
     props.evidence_cta_label = fields.evidence_cta_label || props.evidence_cta_label || 'Read evidence';
-    props.review_cta_label = fields.review_cta_label || props.review_cta_label || '';
-    props.review_route = fields.review_route || props.review_route || '';
-    props.review_title = fields.review_title || props.review_title || '';
-    props.review_preview = fields.review_preview || props.review_preview || '';
-    props.review_link_label = fields.review_link_label || props.review_link_label || 'View review';
     props.compare_label = fields.compare_label || props.compare_label || 'Compare';
     props.compare_route = fields.compare_route || props.compare_route || '/comparisons/';
     props.category_label = fields.category_label || props.category_label || '';
-    props.reviewer = fields.reviewer || props.reviewer || '';
-    props.reviewer_role = fields.reviewer_role || props.reviewer_role || '';
-    props.reviewer_route = fields.reviewer_route || props.reviewer_route || '';
-    props.reviewer_image = fields.reviewer_image || props.reviewer_image || '';
-    props.reviewer_social_links = fields.reviewer_social_links ? parsePipeRows(fields.reviewer_social_links, ['label', 'url']) : (props.reviewer_social_links || []);
     props.updated = fields.updated || props.updated || '';
     props.verdict = fields.verdict || props.verdict || '';
     props.availability = fields.availability || props.availability || 'available';
@@ -12658,6 +12850,7 @@
     props.name = fields.author_name || fields.title || page.title || props.name || '';
     props.role = fields.role || props.role || '';
     props.bio = fields.bio || fields.description || props.bio || '';
+    props.official_url = fields.official_url || props.official_url || '';
     props.reviews_route = fields.reviews_route || props.reviews_route || '/guides/';
     props.social_links = fields.social_links ? parsePipeRows(fields.social_links, ['label', 'url']) : (props.social_links || []);
 
@@ -13709,7 +13902,8 @@
     const slug = normalizeSlug(slugInput && slugInput.value ? slugInput.value : title);
     const route = mode === 'edit' && selectedPage && selectedPage.route
       ? selectedPage.route
-      : (productRouteForSlug(slug, medGenLocaleForActiveSite()) || replacePlaceholders(preset.route_template || '/obzory/{{slug}}/', { '{{slug}}': slug }));
+      : (productRouteForSlug(slug, medGenLocaleForActiveSite()) || replacePlaceholders(preset.route_template || '/reviews/{{slug}}/', { '{{slug}}': slug }));
+    const siteContext = siteContextPayloadForActiveSite();
     const fields = { title };
     const mediaPath = byId('admin-product-card-media-path') ? byId('admin-product-card-media-path').value.trim() : '';
     const mediaAlt = byId('admin-product-card-media-alt') ? byId('admin-product-card-media-alt').value.trim() : '';
@@ -13730,6 +13924,13 @@
     return {
       request_id: requestId('req-product-card-queue'),
       actor: editorialActorPayload(),
+      site_id: siteContext.site_id,
+      site_context: siteContext,
+      root_locale: siteContext.root_locale,
+      locale: siteContext.root_locale,
+      language: siteContext.language,
+      country: siteContext.country,
+      market_currency: siteContext.market_currency,
       content_type: 'product',
       mode,
       language_folder: '',
@@ -14685,11 +14886,9 @@
     const faviconGenerateButtons = document.querySelectorAll('[data-design-favicon-generate]');
     const domainDryRun = siteLaunch ? siteLaunch.querySelector('[data-domain-rebrand-dry-run]') : null;
     const domainApply = siteLaunch ? siteLaunch.querySelector('[data-domain-rebrand-apply]') : null;
-    const maintenanceBackup = siteLaunch ? siteLaunch.querySelector('[data-server-maintenance-backup]') : null;
-    const maintenanceReset = siteLaunch ? siteLaunch.querySelector('[data-server-maintenance-reset]') : null;
-    const maintenanceBackupReset = siteLaunch ? siteLaunch.querySelector('[data-server-maintenance-backup-reset]') : null;
     const domainField = byId('admin-domain-name');
     const routeSeedField = byId('admin-domain-route-seed');
+    const domainLocaleField = byId('admin-domain-default-locale');
     const domainHostingProvider = siteLaunch ? siteLaunch.querySelector('[data-domain-hosting-provider-select]') : null;
 
     generator.querySelectorAll('[data-design-field]').forEach((field) => {
@@ -14809,24 +15008,17 @@
       domainApply.addEventListener('click', () => runSiteRebrandAction(readAuthContract() || {}, false));
     }
 
-    if (maintenanceBackup) {
-      maintenanceBackup.addEventListener('click', () => runServerMaintenanceAction('backup'));
-    }
-
-    if (maintenanceReset) {
-      maintenanceReset.addEventListener('click', () => runServerMaintenanceAction('reset_static_host'));
-    }
-
-    if (maintenanceBackupReset) {
-      maintenanceBackupReset.addEventListener('click', () => runServerMaintenanceAction('backup_and_reset_static_host'));
-    }
-
     if (domainField) {
       domainField.addEventListener('blur', fillDomainDefaults);
     }
 
     if (routeSeedField) {
       routeSeedField.addEventListener('blur', fillDomainDefaults);
+    }
+
+    if (domainLocaleField && domainLocaleField.dataset.domainLocaleBound !== 'true') {
+      domainLocaleField.dataset.domainLocaleBound = 'true';
+      domainLocaleField.addEventListener('change', () => fillDomainDefaults(true));
     }
 
     if (domainHostingProvider) {
@@ -15095,11 +15287,6 @@
     };
   }
 
-  function githubMetricHtml(value) {
-    return '<article class="metric metric--github-rate" data-github-rate-limit data-rate-state="' + (githubState.rateLimitVisible ? 'ready' : 'pending') + '">'
-      + '<h1>Лимиты</h1><h3 data-github-rate-limit-value>' + escapeHtml(value) + '</h3></article>';
-  }
-
   function renderAdminMetrics(manifest) {
     const target = document.querySelector('[data-admin-metrics]');
     const summary = manifest && manifest.summary ? manifest.summary : {};
@@ -15108,9 +15295,6 @@
       return;
     }
 
-    const githubRateMessage = githubState.rateLimitVisible
-      ? githubState.rateLimitMessage
-      : (isGithubMode() ? 'Загрузка лимитов...' : 'GitHub не подключен');
     const profile = activeSiteProfile();
     const scopedPages = scopedPagesList(manifest && manifest.pages ? manifest.pages : []);
     const totalPages = profile ? scopedPages.length : Number(summary.total_pages || 0);
@@ -15132,8 +15316,7 @@
     target.innerHTML = [
       metricHtml('Статус', statusMessage, statusDetail, 'metric--status'),
       metricHtml(contentMetric.label, contentMetric.value, contentMetric.detail),
-      metricHtml('Версия', manifest && manifest.version ? manifest.version : 'n/a'),
-      githubMetricHtml(githubRateMessage)
+      metricHtml('Версия', manifest && manifest.version ? manifest.version : 'n/a')
     ].join('');
 
     enhanceMetricHelp();
@@ -16329,9 +16512,6 @@
     }
     setGatedVisible(true);
     renderAdminMetrics(manifest);
-    if (isGithubMode() && githubToken()) {
-      loadGithubRateLimit();
-    }
     renderTypeOptions(manifest.page_types || []);
     renderPages(scopedPagesList(manifest.pages || []));
     renderWorkflowActions(contracts);
@@ -16442,7 +16622,7 @@
       applyGithubActor(githubState.actorLogin || 'unknown-github-user');
       renderAdminBootstrap(payload);
       refreshRuntimeSiteProfiles({ silent: true });
-      setGithubStatus('GitHub подключен: ' + (authState.actor ? authState.actor.username + ' / ' + authState.actor.role : 'unknown') + '. Редакторские сохранения пишутся через Contents API; Actions запускаются только для build/deploy.');
+      setGithubStatus('GitHub подключен: ' + (authState.actor ? authState.actor.username + ' / ' + authState.actor.role : 'unknown') + '. Редакторские сохранения пишутся через Contents API; release идет через Worker/builder.');
     } catch (error) {
       clearAdminBootstrap('GitHub bootstrap unavailable');
       setGithubStatus('Bootstrap недоступен: ' + (error && error.message ? error.message : 'network error'));
@@ -16485,35 +16665,33 @@
         return { ok: false, message: 'GitHub login ' + actor.username + ' не добавлен в разрешенные профили CMS. Admin должен добавить этот login в блоке "Права и редактор".' };
       }
 
-      loadGithubRateLimit();
-
       return { ok: true, message: 'GitHub token проверен: ' + authState.actor.username + ' / ' + authState.actor.role + '.' };
     } catch (error) {
       return { ok: false, message: error && error.message ? error.message : 'GitHub API недоступен.' };
     }
   }
 
-  function archivedActionsResponse(action, workflow, command) {
+  function githubActionsDisabledResponse(action, workflow, command) {
     return {
       ok: false,
-      action: 'archived_restore_kit_disabled',
+      action: 'github_actions_disabled',
       command: command || '',
       workflow: workflow || '',
       issues: [
         'GitHub Actions отключены как рабочий путь. Нормальная операция должна идти через Cloudflare Worker/D1/R2/KV и server builder.',
-        'Emergency/migration restore kit хранится в docs/github-actions-backup/README.md и включается только вручную.'
+        'Legacy fallback скрыт из production UI и не запускается из админки.'
       ],
       data: {
-        restore_kit: 'docs/github-actions-backup/README.md',
         normal_path: 'worker_runtime_builder_direct_upload'
       }
     };
   }
 
-  function githubActionsArchived() {
+  function githubActionsDisabled() {
     const config = readGithubConfig();
+    const status = String(config.github_actions_status || 'disabled');
 
-    return String(config.github_actions_status || '') === 'archived_restore_kit';
+    return status === 'disabled' || status === 'archived_restore_kit';
   }
 
   async function githubDispatchCommand(command, payload, dryRun) {
@@ -16543,8 +16721,8 @@
       };
     }
 
-    if (githubActionsArchived()) {
-      return archivedActionsResponse('github_workflow_dispatch', workflow, command);
+    if (githubActionsDisabled()) {
+      return githubActionsDisabledResponse('github_workflow_dispatch', workflow, command);
     }
 
     try {
@@ -16570,7 +16748,7 @@
             deploy_static_vps: deployStaticVps,
             actions_url: actionsUrl
           },
-          warnings: ['GitHub принял команду асинхронно. Этот путь допустим только после ручного restore kit.']
+          warnings: ['GitHub принял команду асинхронно. Этот путь не используется в production UI.']
         };
       }
 
@@ -16615,8 +16793,8 @@
       };
     }
 
-    if (githubActionsArchived()) {
-      return archivedActionsResponse('github_workflow_dispatch', workflow, '');
+    if (githubActionsDisabled()) {
+      return githubActionsDisabledResponse('github_workflow_dispatch', workflow, '');
     }
 
     try {
@@ -16639,7 +16817,7 @@
             inputs: normalizedInputs,
             actions_url: actionsUrl || ('https://github.com/' + repository + '/actions/workflows/' + workflow)
           },
-          warnings: ['GitHub принял workflow асинхронно. Этот путь допустим только после ручного restore kit.']
+          warnings: ['GitHub принял workflow асинхронно. Этот путь не используется в production UI.']
         };
       }
 
@@ -17304,7 +17482,6 @@
       setAccountPanelOpen(false);
       clearAdminBootstrap('GitHub token удален из sessionStorage');
       setGithubStatus('GitHub token удален из текущего браузера.');
-      setGithubRateLimit('Act n/a · CF Workers 100k/day', false);
     };
 
     if (tokenInput && storedToken) {

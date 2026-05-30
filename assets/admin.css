@@ -2009,41 +2009,6 @@ code {
   align-content: center;
 }
 
-.metric--github-rate {
-  align-content: center;
-  border-color: color-mix(in srgb, var(--admin-accent) 34%, var(--admin-border));
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--admin-accent) 8%, transparent), transparent 52%),
-    var(--admin-surface);
-}
-
-.metric--github-rate::after {
-  display: none;
-}
-
-.metric--github-rate h1 {
-  margin: 0;
-  color: var(--admin-muted);
-  font-size: 0.62rem;
-  font-weight: 850;
-  letter-spacing: 0;
-  line-height: 1.1;
-}
-
-.metric--github-rate h3 {
-  margin: 0.32rem 0 0;
-  color: var(--admin-text);
-  font-size: clamp(0.55rem, 0.82vw, 0.68rem);
-  font-weight: 900;
-  letter-spacing: 0;
-  line-height: 1.28;
-  overflow-wrap: anywhere;
-}
-
-.metric--github-rate[data-rate-state="pending"] h3 {
-  color: var(--admin-muted);
-}
-
 .metric span,
 .module-card__title span,
 .pill {
@@ -2336,8 +2301,7 @@ button + .field-help,
   display: none;
 }
 
-:root[data-admin-theme="dark"] .metric span,
-:root[data-admin-theme="dark"] .metric--github-rate h1 {
+:root[data-admin-theme="dark"] .metric span {
   color: #9ba9c6;
   font-size: 0.95rem;
   text-transform: none;
@@ -2363,25 +2327,6 @@ button + .field-help,
   color: #f3f7ff;
   font-size: clamp(1.3rem, 2.3vw, 1.75rem);
   text-shadow: none;
-}
-
-:root[data-admin-theme="dark"] .metric--github-rate {
-  gap: 0.65rem;
-}
-
-:root[data-admin-theme="dark"] .metric--github-rate h3 {
-  color: #63f3ff;
-  font-size: clamp(0.98rem, 1.6vw, 1.25rem);
-  line-height: 1.65;
-  text-shadow: 0 0 18px rgba(24, 230, 246, 0.22);
-}
-
-:root[data-admin-theme="dark"] .metric--github-rate h3::first-line {
-  color: #ffffff;
-}
-
-:root[data-admin-theme="dark"] .metric--github-rate::after {
-  display: none;
 }
 
 :root[data-admin-theme="dark"] .admin-spoiler,
@@ -2608,8 +2553,7 @@ button + .field-help,
     display: none;
   }
 
-  :root:not([data-admin-theme]) .metric span,
-  :root:not([data-admin-theme]) .metric--github-rate h1 {
+  :root:not([data-admin-theme]) .metric span {
     color: #9ba9c6;
     font-size: 0.95rem;
     text-transform: none;
@@ -2635,25 +2579,6 @@ button + .field-help,
     color: #f3f7ff;
     font-size: clamp(1.3rem, 2.3vw, 1.75rem);
     text-shadow: none;
-  }
-
-  :root:not([data-admin-theme]) .metric--github-rate {
-    gap: 0.65rem;
-  }
-
-  :root:not([data-admin-theme]) .metric--github-rate h3 {
-    color: #63f3ff;
-    font-size: clamp(0.98rem, 1.6vw, 1.25rem);
-    line-height: 1.65;
-    text-shadow: 0 0 18px rgba(24, 230, 246, 0.22);
-  }
-
-  :root:not([data-admin-theme]) .metric--github-rate h3::first-line {
-    color: #ffffff;
-  }
-
-  :root:not([data-admin-theme]) .metric--github-rate::after {
-    display: none;
   }
 
   :root:not([data-admin-theme]) .admin-spoiler,
@@ -2718,8 +2643,7 @@ button + .field-help,
   display: none;
 }
 
-:root[data-admin-theme="dark"] .metric span,
-:root[data-admin-theme="dark"] .metric--github-rate h1 {
+:root[data-admin-theme="dark"] .metric span {
   font-size: 0.62rem;
 }
 
@@ -2736,11 +2660,6 @@ button + .field-help,
 :root[data-admin-theme="dark"] .metric--status strong,
 :root[data-admin-theme="dark"] .metric:nth-child(5) strong {
   font-size: clamp(0.74rem, 0.9vw, 0.86rem);
-}
-
-:root[data-admin-theme="dark"] .metric--github-rate h3 {
-  font-size: clamp(0.55rem, 0.82vw, 0.68rem);
-  line-height: 1.28;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -2775,8 +2694,7 @@ button + .field-help,
     display: none;
   }
 
-  :root:not([data-admin-theme]) .metric span,
-  :root:not([data-admin-theme]) .metric--github-rate h1 {
+  :root:not([data-admin-theme]) .metric span {
     font-size: 0.62rem;
   }
 
@@ -2795,10 +2713,6 @@ button + .field-help,
     font-size: clamp(0.74rem, 0.9vw, 0.86rem);
   }
 
-  :root:not([data-admin-theme]) .metric--github-rate h3 {
-    font-size: clamp(0.55rem, 0.82vw, 0.68rem);
-    line-height: 1.28;
-  }
 }
 
 .page-list,
@@ -4461,6 +4375,26 @@ body[data-site-context="missing"] .site-workflow__active select {
   color: var(--admin-danger);
 }
 
+.site-workflow__builder-migration {
+  display: grid;
+  gap: var(--admin-space-3);
+  margin-top: var(--admin-space-3);
+  padding: var(--admin-space-3);
+  border: 1px solid color-mix(in srgb, var(--admin-accent) 32%, var(--admin-border));
+  border-radius: var(--admin-radius-control);
+  background: color-mix(in srgb, var(--admin-accent) 7%, var(--admin-surface));
+}
+
+.site-workflow__builder-migration h4 {
+  margin: 0;
+  color: var(--admin-text);
+  font-size: 0.9rem;
+}
+
+.site-workflow__builder-migration p {
+  margin: 0.35rem 0 0;
+}
+
 .site-workflow__steps {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -5477,23 +5411,6 @@ body[data-site-context="missing"] .site-workflow__active select {
   gap: var(--admin-space-4);
 }
 
-.github-rate-limit {
-  align-items: center;
-  background: rgba(15, 124, 129, 0.08);
-  border: 1px solid rgba(15, 124, 129, 0.22);
-  border-radius: var(--admin-radius-sm);
-  color: var(--admin-muted);
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--admin-space-2);
-  justify-content: space-between;
-  padding: var(--admin-space-3) var(--admin-space-4);
-}
-
-.github-rate-limit strong {
-  color: var(--admin-text);
-}
-
 .checkbox-row {
   display: inline-flex;
   align-items: center;
@@ -5674,10 +5591,6 @@ body[data-site-context="missing"] .site-workflow__active select {
     width: 100%;
   }
 
-  .metric--github-rate {
-    grid-column: auto;
-  }
-
   .medgen-task-row {
     grid-template-columns: auto minmax(0, 1fr);
   }
@@ -5781,8 +5694,7 @@ body[data-site-context="missing"] .site-workflow__active select {
   height: 1.14rem;
 }
 
-.metric span,
-.metric--github-rate h1 {
+.metric span {
   color: var(--admin-muted) !important;
   font-size: 0.64rem !important;
   line-height: 1.1;
@@ -5796,8 +5708,7 @@ body[data-site-context="missing"] .site-workflow__active select {
   text-shadow: none !important;
 }
 
-.metric small,
-.metric--github-rate h3 {
+.metric small {
   color: var(--admin-muted) !important;
   font-size: 0.58rem !important;
   line-height: 1.25 !important;
@@ -5808,14 +5719,6 @@ body[data-site-context="missing"] .site-workflow__active select {
   max-height: 2.45rem;
   overflow: auto;
   padding-right: 0.15rem;
-}
-
-.metric--github-rate {
-  gap: 0;
-}
-
-.metric--github-rate h3 {
-  margin-top: 0.28rem;
 }
 
 .field-help,
@@ -6058,19 +5961,16 @@ body[data-site-context="missing"] .site-workflow__active select {
     var(--admin-surface) !important;
 }
 
-:root[data-admin-theme="dark"] .admin-spoiler > summary,
-:root[data-admin-theme="dark"] .metric--github-rate h3::first-line {
+:root[data-admin-theme="dark"] .admin-spoiler > summary {
   color: var(--admin-text) !important;
 }
 
 :root[data-admin-theme="dark"] .metric span,
-:root[data-admin-theme="dark"] .metric small,
-:root[data-admin-theme="dark"] .metric--github-rate h1 {
+:root[data-admin-theme="dark"] .metric small {
   color: var(--admin-muted) !important;
 }
 
-:root[data-admin-theme="dark"] .metric strong,
-:root[data-admin-theme="dark"] .metric--github-rate h3 {
+:root[data-admin-theme="dark"] .metric strong {
   color: var(--admin-accent-strong) !important;
   text-shadow: none !important;
 }
@@ -6185,19 +6085,16 @@ body[data-site-context="missing"] .site-workflow__active select {
       var(--admin-surface) !important;
   }
 
-  :root:not([data-admin-theme]) .admin-spoiler > summary,
-  :root:not([data-admin-theme]) .metric--github-rate h3::first-line {
+  :root:not([data-admin-theme]) .admin-spoiler > summary {
     color: var(--admin-text) !important;
   }
 
   :root:not([data-admin-theme]) .metric span,
-  :root:not([data-admin-theme]) .metric small,
-  :root:not([data-admin-theme]) .metric--github-rate h1 {
+  :root:not([data-admin-theme]) .metric small {
     color: var(--admin-muted) !important;
   }
 
-  :root:not([data-admin-theme]) .metric strong,
-  :root:not([data-admin-theme]) .metric--github-rate h3 {
+  :root:not([data-admin-theme]) .metric strong {
     color: var(--admin-accent-strong) !important;
     text-shadow: none !important;
   }
